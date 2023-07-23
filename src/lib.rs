@@ -155,12 +155,16 @@ mod tests {
         let felipe = navigate_iter(&yaml, first_persons_name).next().unwrap();
         assert_eq!(felipe, Value::String("Felipe".into()));
 
-        let all_people = Query {
-            steps: vec![Step::Field("people".to_string()), Step::All],
+        let yoga = Query {
+            steps: vec![
+                Step::Field("people".to_string()),
+                Step::All,
+                Step::Field("sports".to_string()),
+                Step::Index(1),
+            ],
         };
 
-        let people: Vec<_> = navigate_iter(&yaml, all_people).collect();
-
-        assert_eq!(people.len(), 2)
+        let yoga: Vec<_> = navigate_iter(&yaml, yoga).collect();
+        assert_eq!(yoga, vec![Value::String("yoga".to_string())]);
     }
 }
