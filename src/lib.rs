@@ -83,15 +83,15 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
                 query: remaining_query,
             })
         }
-        (Step::All, Value::Sequence(s)) => {
-            let mut x = Vec::new();
-            for val in s {
-                x.push(Paths {
-                    starting_point: val,
+        (Step::All, Value::Sequence(sequence)) => {
+            let mut additional_paths = Vec::new();
+            for point in sequence {
+                additional_paths.push(Paths {
+                    starting_point: point,
                     query: remaining_query.clone(),
                 });
             }
-            DiveOutcome::Branch(x)
+            DiveOutcome::Branch(additional_paths)
         }
         (step, value) => {
             panic!("{step:?} not supported for {value:?}");
