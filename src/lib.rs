@@ -22,18 +22,43 @@ impl Query {
 }
 
 #[derive(Clone)]
-enum Step {
+pub enum Step {
     Field(String),
-    Index(usize),
+    At(usize),
     All,
     Where(String, Arc<dyn Fn(&serde_yaml::Value) -> bool>),
+}
+
+impl Step {
+    pub fn at(value: usize) -> Step {
+        Step::At(value)
+    }
+
+    pub fn field<S: Into<String>>(value: S) -> Step {
+        Step::Field(value.into())
+    }
+
+    pub fn typed_where<D: DeserializeOwned, F: Fn(D) -> bool + 'static>(
+        field: impl Into<String>,
+        fun: F,
+    ) -> Step {
+        Step::Where(
+            field.into(),
+            Arc::new(move |value: &serde_yaml::Value| {
+                let Ok(actual) = serde_yaml::from_value(value.clone()) else {
+                return false;
+            };
+                fun(actual)
+            }),
+        )
+    }
 }
 
 impl std::fmt::Debug for Step {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Field(arg0) => f.debug_tuple("Field").field(arg0).finish(),
-            Self::Index(arg0) => f.debug_tuple("Index").field(arg0).finish(),
+            Self::At(arg0) => f.debug_tuple("Index").field(arg0).finish(),
             Self::All => write!(f, "All"),
             Self::Where(arg0, _arg1) => f.debug_tuple("Where").field(arg0).finish(),
         }
@@ -88,7 +113,7 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
                 query: remaining_query,
             })
         }
-        (Step::Index(idx), Value::Sequence(s)) => {
+        (Step::At(idx), Value::Sequence(s)) => {
             let Some(next_value) = s.get(idx) else {
                     return DiveOutcome::Nothing;
             };
@@ -107,14 +132,14 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
             }
             DiveOutcome::Branch(additional_paths)
         }
-        (Step::Where(field, predicate), Value::Sequence(s)) => {
+        (Step::Where(field, predicate), Value::Sequence(sequence)) => {
             let accessor = Value::String(field);
             let mut additional_paths = Vec::new();
-            for val in s {
-                let Some(next_value) = val.get(accessor.clone()) else {
+            for val in sequence {
+                let Some(value_to_check) = val.get(accessor.clone()) else {
                     continue;
                 };
-                if !predicate(next_value) {
+                if !predicate(value_to_check) {
                     continue;
                 }
 
@@ -180,7 +205,7 @@ mod tests {
         let first_persons_name = Query {
             steps: vec![
                 Step::Field("people".to_string()),
-                Step::Index(0),
+                Step::At(0),
                 Step::Field("name".to_string()),
             ],
         };
@@ -190,10 +215,10 @@ mod tests {
 
         let yoga = Query {
             steps: vec![
-                Step::Field("people".to_string()),
+                Step::field("people"),
                 Step::All,
-                Step::Field("sports".to_string()),
-                Step::Index(1),
+                Step::field("sports"),
+                Step::at(1),
             ],
         };
 
@@ -231,9 +256,9 @@ mod tests {
         // TODO: A macro to do query!["people", 0, "name"] would be ace!
         let names_of_people_aged_over_31 = Query {
             steps: vec![
-                Step::Field("people".to_string()),
-                typed_where("age", |age: u32| age > 30),
-                Step::Field("name".to_string()),
+                Step::field("people"),
+                Step::typed_where("age", |age: u32| age > 30),
+                Step::field("name"),
             ],
         };
 
@@ -243,26 +268,3 @@ mod tests {
         assert_eq!(felipe, Value::String("Felipe".into()));
     }
 }
-
-fn typed_where<D: DeserializeOwned, F: Fn(D) -> bool + 'static>(
-    field: impl Into<String>,
-    fun: F,
-) -> Step {
-    Step::Where(
-        field.into(),
-        Arc::new(move |value: &serde_yaml::Value| {
-            let Ok(actual) = serde_yaml::from_value(value.clone()) else {
-                return false;
-            };
-            fun(actual)
-        }),
-    )
-}
-
-trait Where {
-    fn check(&self, value: &serde_yaml::Value) -> bool;
-}
-
-// Step 1: Have a trait that accepts a serde_yaml::Value
-// Step 2: Implement that trait on generic functions
-//
