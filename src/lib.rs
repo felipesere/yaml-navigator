@@ -54,8 +54,8 @@ impl Step {
             field.into(),
             Arc::new(move |value: &serde_yaml::Value| {
                 let Ok(actual) = serde_yaml::from_value(value.clone()) else {
-                return false;
-            };
+                    return false;
+                };
                 fun(actual)
             }),
         )
@@ -89,10 +89,10 @@ impl<'input> Iterator for ManyResults<'input> {
         while let Some(path_to_explore) = self.paths_to_explore.pop_front() {
             match dive(path_to_explore) {
                 DiveOutcome::Final(value) => return Some(value),
-                DiveOutcome::Nothing => {} // might have to explore more paths here!
                 DiveOutcome::Branch(more_paths_to_consider) => {
                     self.paths_to_explore.extend(more_paths_to_consider);
                 }
+                DiveOutcome::Nothing => {}
             };
         }
         None
