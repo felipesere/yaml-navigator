@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::panic;
 use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
@@ -26,10 +25,19 @@ pub enum Step {
     Field(String),
     At(usize),
     All,
-    Where(String, Arc<dyn Fn(&serde_yaml::Value) -> bool>),
+    Filter(String, Arc<dyn Fn(&serde_yaml::Value) -> bool>),
 }
 
 impl Step {
+    fn name(&self) -> &'static str {
+        match self {
+            Step::Field(_) => "field",
+            Step::At(_) => "at",
+            Step::All => "all",
+            Step::Filter(_, _) => "filter",
+        }
+    }
+
     pub fn at(value: usize) -> Step {
         Step::At(value)
     }
@@ -38,11 +46,11 @@ impl Step {
         Step::Field(value.into())
     }
 
-    pub fn typed_where<D: DeserializeOwned, F: Fn(D) -> bool + 'static>(
+    pub fn filter<D: DeserializeOwned, F: Fn(D) -> bool + 'static>(
         field: impl Into<String>,
         fun: F,
     ) -> Step {
-        Step::Where(
+        Step::Filter(
             field.into(),
             Arc::new(move |value: &serde_yaml::Value| {
                 let Ok(actual) = serde_yaml::from_value(value.clone()) else {
@@ -60,7 +68,7 @@ impl std::fmt::Debug for Step {
             Self::Field(arg0) => f.debug_tuple("Field").field(arg0).finish(),
             Self::At(arg0) => f.debug_tuple("Index").field(arg0).finish(),
             Self::All => write!(f, "All"),
-            Self::Where(arg0, _arg1) => f.debug_tuple("Where").field(arg0).finish(),
+            Self::Filter(arg0, _arg1) => f.debug_tuple("Where").field(arg0).finish(),
         }
     }
 }
@@ -106,7 +114,7 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
         (Step::Field(f), Value::Mapping(m)) => {
             let accessor = Value::String(f);
             let Some(next_value) = m.get(accessor) else {
-                    return DiveOutcome::Nothing;
+                return DiveOutcome::Nothing;
             };
             dive(Paths {
                 starting_point: next_value,
@@ -115,7 +123,7 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
         }
         (Step::At(idx), Value::Sequence(s)) => {
             let Some(next_value) = s.get(idx) else {
-                    return DiveOutcome::Nothing;
+                return DiveOutcome::Nothing;
             };
             dive(Paths {
                 starting_point: next_value,
@@ -132,7 +140,7 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
             }
             DiveOutcome::Branch(additional_paths)
         }
-        (Step::Where(field, predicate), Value::Sequence(sequence)) => {
+        (Step::Filter(field, predicate), Value::Sequence(sequence)) => {
             let accessor = Value::String(field);
             let mut additional_paths = Vec::new();
             for val in sequence {
@@ -151,8 +159,33 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
 
             DiveOutcome::Branch(additional_paths)
         }
-        (step, value) => {
-            panic!("{step:?} not supported for {value:?}");
+        (step, Value::Null) => {
+            tracing::warn!("{} not supported for 'null' value", step.name());
+            DiveOutcome::Nothing
+        }
+        (step, Value::Bool(_)) => {
+            tracing::warn!("{} not supported for 'bool' value", step.name());
+            DiveOutcome::Nothing
+        }
+        (step, Value::Number(_)) => {
+            tracing::warn!("{} not supported for 'number' value", step.name());
+            DiveOutcome::Nothing
+        }
+        (step, Value::String(_)) => {
+            tracing::warn!("{} not supported for 'string' value", step.name());
+            DiveOutcome::Nothing
+        }
+        (step, Value::Sequence(_)) => {
+            tracing::warn!("{} not supported for 'sequence' value", step.name());
+            DiveOutcome::Nothing
+        }
+        (step, Value::Mapping(_)) => {
+            tracing::warn!("{} not supported for 'mapping' value", step.name());
+            DiveOutcome::Nothing
+        }
+        (step, Value::Tagged(_)) => {
+            tracing::warn!("{} not supported for 'tagged' value", step.name());
+            DiveOutcome::Nothing
         }
     }
 }
@@ -201,7 +234,7 @@ mod tests {
             "#};
         let yaml: Value = serde_yaml::from_str(raw).unwrap();
 
-        // TODO: A macro to do query!["people", 0, "name"] would be ace!
+        // TODO: A macro to do query!["people", *, "name"] would be ace!
         let first_persons_name = Query {
             steps: vec![
                 Step::Field("people".to_string()),
@@ -213,6 +246,7 @@ mod tests {
         let felipe = navigate_iter(&yaml, first_persons_name).next().unwrap();
         assert_eq!(felipe, Value::String("Felipe".into()));
 
+        // TODO: A macro to do query!["people", *, "name", "sports"] would be ace!
         let yoga = Query {
             steps: vec![
                 Step::field("people"),
@@ -227,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn where_clause() {
+    fn filter_clause() {
         let raw = indoc! {r#"
             people:
                 - name: Felipe
@@ -253,11 +287,11 @@ mod tests {
             "#};
         let yaml: Value = serde_yaml::from_str(raw).unwrap();
 
-        // TODO: A macro to do query!["people", 0, "name"] would be ace!
+        // TODO: A macro to do query!["people", |age: u32|  age > 30, "name"] would be ace!
         let names_of_people_aged_over_31 = Query {
             steps: vec![
                 Step::field("people"),
-                Step::typed_where("age", |age: u32| age > 30),
+                Step::filter("age", |age: u32| age > 30),
                 Step::field("name"),
             ],
         };
@@ -266,5 +300,50 @@ mod tests {
             .next()
             .unwrap();
         assert_eq!(felipe, Value::String("Felipe".into()));
+    }
+
+    #[test]
+    fn find_nothing() {
+        let raw = indoc! {r#"
+            people:
+                - name: Felipe
+                  surname: Sere
+                  age: 32
+                  address:
+                    street: Foo
+                    postcode: 12345
+                    city: Legoland
+                  hobbies:
+                    - tennis
+                    - computer
+                - name: Charlotte
+                  surname: Fereday
+                  age: 31
+                  address:
+                    street: Bar
+                    postcode: 12345
+                    city: Legoland
+                  sports:
+                   - swimming
+                   - yoga
+            "#};
+        let yaml: Value = serde_yaml::from_str(raw).unwrap();
+
+        let missing_property = Query {
+            steps: vec![Step::field("people"), Step::All, Step::field("car")],
+        };
+
+        let no_one = navigate_iter(&yaml, missing_property).next();
+        assert!(no_one.is_none());
+
+        let filter_does_not_match = Query {
+            steps: vec![
+                Step::field("people"),
+                Step::filter("age", |age: u32| age < 4),
+            ],
+        };
+
+        let no_one = navigate_iter(&yaml, filter_does_not_match).next();
+        assert!(no_one.is_none());
     }
 }
