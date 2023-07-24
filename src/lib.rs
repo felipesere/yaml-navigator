@@ -6,7 +6,7 @@ use serde_yaml::Value;
 
 #[derive(Clone, Debug)]
 pub struct Query {
-    steps: Vec<Step>,
+    pub steps: Vec<Step>,
 }
 
 impl Query {
