@@ -158,6 +158,19 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
 
             DiveOutcome::Branch(additional_paths)
         }
+        (Step::Filter(field, predicate), Value::Mapping(m)) => {
+            let Some(value_to_check) = m.get(field) else {
+                return DiveOutcome::Nothing
+            };
+            if !predicate(value_to_check) {
+                return DiveOutcome::Nothing;
+            }
+
+            dive(Paths {
+                starting_point: path.starting_point,
+                query: remaining_query,
+            })
+        }
         (step, Value::Null) => {
             tracing::warn!("{} not supported for 'null' value", step.name());
             DiveOutcome::Nothing
@@ -344,5 +357,45 @@ mod tests {
 
         let no_one = navigate_iter(&yaml, filter_does_not_match).next();
         assert!(no_one.is_none());
+    }
+
+    #[test]
+    fn filter_on_mapping() {
+        let raw = indoc! {r#"
+            people:
+                - name: Felipe
+                  surname: Sere
+                  age: 32
+                  address:
+                    street: Foo
+                    postcode: 12345
+                    city: Legoland
+                  hobbies:
+                    - tennis
+                    - computer
+                - name: Charlotte
+                  surname: Fereday
+                  age: 31
+                  address:
+                    street: Bar
+                    postcode: 12345
+                    city: Legoland
+                  sports:
+                   - swimming
+                   - yoga
+            "#};
+        let yaml: Value = serde_yaml::from_str(raw).unwrap();
+
+        let finds_address = Query {
+            steps: vec![
+                Step::field("people"),
+                Step::All,
+                Step::field("address"),
+                Step::filter("street", |street: String| street == "Foo"),
+            ],
+        };
+
+        let felipe: Vec<_> = navigate_iter(&yaml, finds_address).collect();
+        assert_eq!(felipe.len(), 1);
     }
 }
