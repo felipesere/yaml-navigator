@@ -11,7 +11,7 @@ pub struct Query {
 
 impl Query {
     fn take_step(&self) -> Option<(Step, Query)> {
-        if self.steps.len() == 0 {
+        if self.steps.is_empty() {
             return None;
         };
         let mut others = self.steps.clone();
