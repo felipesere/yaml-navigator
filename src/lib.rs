@@ -141,10 +141,9 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
             DiveOutcome::Branch(additional_paths)
         }
         (Step::Filter(field, predicate), Value::Sequence(sequence)) => {
-            let accessor = Value::String(field);
             let mut additional_paths = Vec::new();
             for val in sequence {
-                let Some(value_to_check) = val.get(accessor.clone()) else {
+                let Some(value_to_check) = val.get(&field) else {
                     continue;
                 };
                 if !predicate(value_to_check) {
