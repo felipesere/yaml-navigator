@@ -83,12 +83,12 @@ pub struct ManyResults<'input> {
 }
 
 impl<'input> Iterator for ManyResults<'input> {
-    type Item = Value;
+    type Item = &'input Value;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(path_to_explore) = self.paths_to_explore.pop_front() {
             match dive(path_to_explore) {
-                DiveOutcome::Final(value) => return Some(value.clone()),
+                DiveOutcome::Final(value) => return Some(value),
                 DiveOutcome::Nothing => {} // might have to explore more paths here!
                 DiveOutcome::Branch(more_paths_to_consider) => {
                     self.paths_to_explore.extend(more_paths_to_consider);
@@ -244,7 +244,7 @@ mod tests {
         };
 
         let felipe = navigate_iter(&yaml, first_persons_name).next().unwrap();
-        assert_eq!(felipe, Value::String("Felipe".into()));
+        assert_eq!(felipe, &Value::String("Felipe".into()));
 
         // TODO: A macro to do query!["people", *, "name", "sports"] would be ace!
         let yoga = Query {
@@ -257,7 +257,7 @@ mod tests {
         };
 
         let yoga: Vec<_> = navigate_iter(&yaml, yoga).collect();
-        assert_eq!(yoga, vec![Value::String("yoga".to_string())]);
+        assert_eq!(yoga, vec![&Value::String("yoga".to_string())]);
     }
 
     #[test]
@@ -299,7 +299,7 @@ mod tests {
         let felipe = navigate_iter(&yaml, names_of_people_aged_over_31)
             .next()
             .unwrap();
-        assert_eq!(felipe, Value::String("Felipe".into()));
+        assert_eq!(felipe, &Value::String("Felipe".into()));
     }
 
     #[test]
