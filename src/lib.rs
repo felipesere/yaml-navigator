@@ -26,6 +26,7 @@ pub enum Step {
     At(usize),
     All,
     Filter(String, Arc<dyn Fn(&serde_yaml::Value) -> bool>),
+    SubQuery(String, Query),
 }
 
 impl Step {
@@ -35,6 +36,7 @@ impl Step {
             Step::At(_) => "at",
             Step::All => "all",
             Step::Filter(_, _) => "filter",
+            Step::SubQuery(_, _) => "sub_query",
         }
     }
 
@@ -60,6 +62,10 @@ impl Step {
             }),
         )
     }
+
+    pub fn sub_query(field: impl Into<String>, query: Query) -> Step {
+        Step::SubQuery(field.into(), query)
+    }
 }
 
 impl std::fmt::Debug for Step {
@@ -68,7 +74,8 @@ impl std::fmt::Debug for Step {
             Self::Field(arg0) => f.debug_tuple("Field").field(arg0).finish(),
             Self::At(arg0) => f.debug_tuple("Index").field(arg0).finish(),
             Self::All => write!(f, "All"),
-            Self::Filter(arg0, _arg1) => f.debug_tuple("Where").field(arg0).finish(),
+            Self::Filter(arg0, _arg1) => f.debug_tuple("Filter").field(arg0).finish(),
+            Self::SubQuery(arg, _arg2) => f.debug_tuple("SubQuery").field(arg).finish(),
         }
     }
 }
@@ -166,6 +173,24 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
                 return DiveOutcome::Nothing;
             }
 
+            dive(Paths {
+                starting_point: path.starting_point,
+                query: remaining_query,
+            })
+        }
+        (Step::SubQuery(field, sub_query), Value::Mapping(m)) => {
+            let value_to_check = if field == "." {
+                path.starting_point
+            } else {
+                let Some(value) = m.get(field) else {
+                    return DiveOutcome::Nothing
+                };
+                value
+            };
+
+            if navigate_iter(value_to_check, sub_query).next().is_none() {
+                return DiveOutcome::Nothing;
+            }
             dive(Paths {
                 starting_point: path.starting_point,
                 query: remaining_query,
@@ -392,6 +417,52 @@ mod tests {
                 Step::All,
                 Step::field("address"),
                 Step::filter("street", |street: String| street == "Foo"),
+            ],
+        };
+
+        let felipe: Vec<_> = navigate_iter(&yaml, finds_address).collect();
+        assert_eq!(felipe.len(), 1);
+    }
+
+    #[test]
+    fn sub_query_for_filter() {
+        let raw = indoc! {r#"
+            people:
+                - name: Felipe
+                  surname: Sere
+                  age: 32
+                  address:
+                    street: Foo
+                    postcode: 12345
+                    city: Legoland
+                  hobbies:
+                    - tennis
+                    - computer
+                - name: Charlotte
+                  surname: Fereday
+                  age: 31
+                  address:
+                    street: Bar
+                    postcode: 12345
+                    city: Legoland
+                  sports:
+                   - swimming
+                   - yoga
+            "#};
+        let yaml: Value = serde_yaml::from_str(raw).unwrap();
+
+        let live_on_foo_street = Query {
+            steps: vec![
+                Step::field("address"),
+                Step::filter("street", |street: String| street == "Foo"),
+            ],
+        };
+
+        let finds_address = Query {
+            steps: vec![
+                Step::field("people"),
+                Step::All,
+                Step::sub_query(".", live_on_foo_street),
             ],
         };
 
