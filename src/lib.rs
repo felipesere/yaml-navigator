@@ -166,9 +166,15 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
             DiveOutcome::Branch(additional_paths)
         }
         (Step::Filter(field, predicate), Value::Mapping(m)) => {
-            let Some(value_to_check) = m.get(field) else {
-                return DiveOutcome::Nothing
+            let value_to_check = if field == "." {
+                path.starting_point
+            } else {
+                let Some(value) = m.get(field) else {
+                    return DiveOutcome::Nothing
+                };
+                value
             };
+
             if !predicate(value_to_check) {
                 return DiveOutcome::Nothing;
             }
@@ -196,34 +202,25 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
                 query: remaining_query,
             })
         }
-        (step, Value::Null) => {
-            tracing::warn!("{} not supported for 'null' value", step.name());
+        (step, value) => {
+            let step = step.name();
+            let value = value_name(value);
+            tracing::warn!("'{step}' not supported for '{value}'",);
+
             DiveOutcome::Nothing
         }
-        (step, Value::Bool(_)) => {
-            tracing::warn!("{} not supported for 'bool' value", step.name());
-            DiveOutcome::Nothing
-        }
-        (step, Value::Number(_)) => {
-            tracing::warn!("{} not supported for 'number' value", step.name());
-            DiveOutcome::Nothing
-        }
-        (step, Value::String(_)) => {
-            tracing::warn!("{} not supported for 'string' value", step.name());
-            DiveOutcome::Nothing
-        }
-        (step, Value::Sequence(_)) => {
-            tracing::warn!("{} not supported for 'sequence' value", step.name());
-            DiveOutcome::Nothing
-        }
-        (step, Value::Mapping(_)) => {
-            tracing::warn!("{} not supported for 'mapping' value", step.name());
-            DiveOutcome::Nothing
-        }
-        (step, Value::Tagged(_)) => {
-            tracing::warn!("{} not supported for 'tagged' value", step.name());
-            DiveOutcome::Nothing
-        }
+    }
+}
+
+fn value_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Sequence(_) => "sequence",
+        Value::Mapping(_) => "mapping",
+        Value::Tagged(_) => "tagged",
     }
 }
 
@@ -271,7 +268,6 @@ mod tests {
             "#};
         let yaml: Value = serde_yaml::from_str(raw).unwrap();
 
-        // TODO: A macro to do query!["people", *, "name"] would be ace!
         let first_persons_name = Query {
             steps: vec![
                 Step::Field("people".to_string()),
@@ -283,7 +279,6 @@ mod tests {
         let felipe = navigate_iter(&yaml, first_persons_name).next().unwrap();
         assert_eq!(felipe, &Value::String("Felipe".into()));
 
-        // TODO: A macro to do query!["people", *, "name", "sports"] would be ace!
         let yoga = Query {
             steps: vec![
                 Step::field("people"),
@@ -324,7 +319,6 @@ mod tests {
             "#};
         let yaml: Value = serde_yaml::from_str(raw).unwrap();
 
-        // TODO: A macro to do query!["people", |age: u32|  age > 30, "name"] would be ace!
         let names_of_people_aged_over_31 = Query {
             steps: vec![
                 Step::field("people"),
