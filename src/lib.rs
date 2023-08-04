@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
@@ -27,6 +28,7 @@ pub enum Step {
     All,
     Filter(String, Arc<dyn Fn(&serde_yaml::Value) -> bool>),
     SubQuery(String, Query),
+    Range(Range<usize>),
 }
 
 impl Step {
@@ -34,6 +36,7 @@ impl Step {
         match self {
             Step::Field(_) => "field",
             Step::At(_) => "at",
+            Step::Range(_) => "range",
             Step::All => "all",
             Step::Filter(_, _) => "filter",
             Step::SubQuery(_, _) => "sub_query",
@@ -42,6 +45,10 @@ impl Step {
 
     pub fn at(value: usize) -> Step {
         Step::At(value)
+    }
+
+    pub fn range(value: Range<usize>) -> Step {
+        Step::Range(value)
     }
 
     pub fn field<S: Into<String>>(value: S) -> Step {
@@ -74,6 +81,7 @@ impl std::fmt::Debug for Step {
             Self::Field(arg0) => f.debug_tuple("Field").field(arg0).finish(),
             Self::At(arg0) => f.debug_tuple("Index").field(arg0).finish(),
             Self::All => write!(f, "All"),
+            Self::Range(r) => f.debug_tuple("Range").field(r).finish(),
             Self::Filter(arg0, _arg1) => f.debug_tuple("Filter").field(arg0).finish(),
             Self::SubQuery(arg, _arg2) => f.debug_tuple("SubQuery").field(arg).finish(),
         }
@@ -136,6 +144,16 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
                 starting_point: next_value,
                 query: remaining_query,
             })
+        }
+        (Step::Range(r), Value::Sequence(sequence)) => {
+            let mut additional_paths = Vec::new();
+            for point in &sequence[r] {
+                additional_paths.push(Paths {
+                    starting_point: point,
+                    query: remaining_query.clone(),
+                });
+            }
+            DiveOutcome::Branch(additional_paths)
         }
         (Step::All, Value::Sequence(sequence)) => {
             let mut additional_paths = Vec::new();
@@ -290,6 +308,34 @@ mod tests {
 
         let yoga: Vec<_> = navigate_iter(&yaml, yoga).collect();
         assert_eq!(yoga, vec![&Value::String("yoga".to_string())]);
+    }
+
+    #[test]
+    fn range_of_indizes() {
+        let raw = indoc! {r#"
+            people:
+                - name: Felipe
+                - name: Charlotte
+                - name: Alice
+                - name: Bob
+                - name: Malory
+        "#};
+
+        let query = Query {
+            steps: vec![
+                Step::field("people"),
+                Step::range(1..4),
+                Step::field("name"),
+            ],
+        };
+
+        let yaml: Value = serde_yaml::from_str(raw).unwrap();
+
+        let names: Vec<_> = navigate_iter(&yaml, query)
+            .filter_map(|v| v.as_str())
+            .collect();
+
+        assert_eq!(names, vec!["Charlotte", "Alice", "Bob"]);
     }
 
     #[test]
