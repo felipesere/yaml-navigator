@@ -1,3 +1,4 @@
+#![allow(unused_macros)]
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
@@ -5,7 +6,17 @@ use std::sync::Arc;
 use serde::de::DeserializeOwned;
 use serde_yaml::Value;
 
-#[derive(Clone, Debug)]
+macro_rules! query {
+    ($($a:expr,)+) => {{
+        let mut the_query = Query::default();
+        $(
+            the_query.steps.push($a.into());
+        )+
+        the_query
+    }};
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct Query {
     pub steps: Vec<Step>,
 }
@@ -29,6 +40,35 @@ pub enum Step {
     Filter(String, Arc<dyn Fn(&serde_yaml::Value) -> bool>),
     SubQuery(String, Query),
     Range(Range<usize>),
+}
+
+impl From<String> for Step {
+    fn from(value: String) -> Self {
+        if value == "*" {
+            Step::All
+        } else {
+            Step::Field(value.into())
+        }
+    }
+}
+
+impl From<&str> for Step {
+    fn from(value: &str) -> Self {
+        let val = value.to_string();
+        Step::from(val)
+    }
+}
+
+impl From<usize> for Step {
+    fn from(value: usize) -> Self {
+        Step::At(value)
+    }
+}
+
+impl From<Range<usize>> for Step {
+    fn from(value: Range<usize>) -> Self {
+        Step::Range(value)
+    }
 }
 
 impl Step {
@@ -286,25 +326,12 @@ mod tests {
             "#};
         let yaml: Value = serde_yaml::from_str(raw).unwrap();
 
-        let first_persons_name = Query {
-            steps: vec![
-                Step::Field("people".to_string()),
-                Step::At(0),
-                Step::Field("name".to_string()),
-            ],
-        };
+        let first_persons_name = query!["people", 0, "name",];
 
         let felipe = navigate_iter(&yaml, first_persons_name).next().unwrap();
         assert_eq!(felipe, &Value::String("Felipe".into()));
 
-        let yoga = Query {
-            steps: vec![
-                Step::field("people"),
-                Step::All,
-                Step::field("sports"),
-                Step::at(1),
-            ],
-        };
+        let yoga = query!("people", "*", "sports", 1,);
 
         let yoga: Vec<_> = navigate_iter(&yaml, yoga).collect();
         assert_eq!(yoga, vec![&Value::String("yoga".to_string())]);
@@ -321,13 +348,7 @@ mod tests {
                 - name: Malory
         "#};
 
-        let query = Query {
-            steps: vec![
-                Step::field("people"),
-                Step::range(1..4),
-                Step::field("name"),
-            ],
-        };
+        let query = query!("people", 1..4, "name",);
 
         let yaml: Value = serde_yaml::from_str(raw).unwrap();
 
