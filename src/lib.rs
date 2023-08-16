@@ -6,13 +6,34 @@ use std::sync::Arc;
 use serde::de::DeserializeOwned;
 use serde_yaml::Value;
 
+macro_rules! step {
+    ("*") => {
+        Step::All
+    };
+    ($a:expr) => {
+        Step::from($a)
+    };
+}
+
 macro_rules! query {
-    ($($a:expr,)+) => {{
+    ($($a:expr $(,)?)+) => {{
         let mut the_query = Query::default();
         $(
-            the_query.steps.push($a.into());
+            the_query.steps.push(step!($a));
         )+
         the_query
+    }};
+}
+
+macro_rules! r#where {
+    ($field:literal => $body:expr) => {{
+        Step::filter($field, $body)
+    }};
+}
+
+macro_rules! sub {
+    ($field:literal => $sub_query:expr) => {{
+        Step::sub_query($field, $sub_query)
     }};
 }
 
@@ -386,13 +407,8 @@ mod tests {
             "#};
         let yaml: Value = serde_yaml::from_str(raw).unwrap();
 
-        let names_of_people_aged_over_31 = Query {
-            steps: vec![
-                Step::field("people"),
-                Step::filter("age", |age: u32| age > 30),
-                Step::field("name"),
-            ],
-        };
+        let names_of_people_aged_over_31 =
+            query!["people", r#where!("age" => |age: u32| age > 30), "name",];
 
         let felipe = navigate_iter(&yaml, names_of_people_aged_over_31)
             .next()
@@ -427,19 +443,12 @@ mod tests {
             "#};
         let yaml: Value = serde_yaml::from_str(raw).unwrap();
 
-        let missing_property = Query {
-            steps: vec![Step::field("people"), Step::All, Step::field("car")],
-        };
+        let missing_property = query!["people", "*", "car"];
 
         let no_one = navigate_iter(&yaml, missing_property).next();
         assert!(no_one.is_none());
 
-        let filter_does_not_match = Query {
-            steps: vec![
-                Step::field("people"),
-                Step::filter("age", |age: u32| age < 4),
-            ],
-        };
+        let filter_does_not_match = query!["people", r#where!("age" => |age: u32| age < 4),];
 
         let no_one = navigate_iter(&yaml, filter_does_not_match).next();
         assert!(no_one.is_none());
@@ -472,14 +481,12 @@ mod tests {
             "#};
         let yaml: Value = serde_yaml::from_str(raw).unwrap();
 
-        let finds_address = Query {
-            steps: vec![
-                Step::field("people"),
-                Step::All,
-                Step::field("address"),
-                Step::filter("street", |street: String| street == "Foo"),
-            ],
-        };
+        let finds_address = query![
+            "people",
+            "*",
+            "address",
+            r#where!("street" => |street: String| street == "Foo")
+        ];
 
         let felipe: Vec<_> = navigate_iter(&yaml, finds_address).collect();
         assert_eq!(felipe.len(), 1);
@@ -512,20 +519,12 @@ mod tests {
             "#};
         let yaml: Value = serde_yaml::from_str(raw).unwrap();
 
-        let live_on_foo_street = Query {
-            steps: vec![
-                Step::field("address"),
-                Step::filter("street", |street: String| street == "Foo"),
-            ],
-        };
+        let live_on_foo_street = query![
+            "address",
+            r#where!("street" => |street: String| street == "Foo"),
+        ];
 
-        let finds_address = Query {
-            steps: vec![
-                Step::field("people"),
-                Step::All,
-                Step::sub_query(".", live_on_foo_street),
-            ],
-        };
+        let finds_address = query!["people", "*", sub!("." => live_on_foo_street),];
 
         let felipe: Vec<_> = navigate_iter(&yaml, finds_address).collect();
         assert_eq!(felipe.len(), 1);
