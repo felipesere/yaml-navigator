@@ -37,6 +37,16 @@ macro_rules! sub {
     }};
 }
 
+macro_rules! and {
+    ($($a:expr $(,)?)+) => {{
+        let mut arms: Vec<Query> = Vec::new();
+        $(
+            arms.push($a);
+        )+
+        Step::And(arms)
+    }};
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Query {
     pub steps: Vec<Step>,
@@ -56,6 +66,7 @@ impl Query {
 #[derive(Clone)]
 pub enum Step {
     Field(String),
+    And(Vec<Query>),
     At(usize),
     All,
     Filter(String, Arc<dyn Fn(&serde_yaml::Value) -> bool>),
@@ -96,6 +107,7 @@ impl Step {
     fn name(&self) -> &'static str {
         match self {
             Step::Field(_) => "field",
+            Step::And(_) => "and",
             Step::At(_) => "at",
             Step::Range(_) => "range",
             Step::All => "all",
@@ -140,6 +152,7 @@ impl std::fmt::Debug for Step {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Field(arg0) => f.debug_tuple("Field").field(arg0).finish(),
+            Self::And(arg0) => f.debug_tuple("And").field(arg0).finish(),
             Self::At(arg0) => f.debug_tuple("Index").field(arg0).finish(),
             Self::All => write!(f, "All"),
             Self::Range(r) => f.debug_tuple("Range").field(r).finish(),
@@ -186,6 +199,7 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
         return DiveOutcome::Final(path.starting_point);
     };
 
+    tracing::info!("Matching {next_step:?} against {:?}", path.starting_point);
     match (next_step, path.starting_point) {
         (Step::Field(f), Value::Mapping(m)) => {
             let accessor = Value::String(f);
@@ -226,12 +240,32 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
             }
             DiveOutcome::Branch(additional_paths)
         }
+        (Step::Filter(field, predicate), s @ Value::String(_)) => {
+            if field != "." {
+                return DiveOutcome::Nothing;
+            }
+
+            if !predicate(s) {
+                return DiveOutcome::Nothing;
+            }
+
+            dive(Paths {
+                starting_point: path.starting_point,
+                query: remaining_query,
+            })
+        }
         (Step::Filter(field, predicate), Value::Sequence(sequence)) => {
             let mut additional_paths = Vec::new();
             for val in sequence {
-                let Some(value_to_check) = val.get(&field) else {
-                    continue;
+                let value_to_check = if field == "." {
+                    val
+                } else {
+                    let Some(value) = val.get(&field) else {
+                        return DiveOutcome::Nothing
+                    };
+                    value
                 };
+
                 if !predicate(value_to_check) {
                     continue;
                 }
@@ -274,6 +308,20 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
             };
 
             if navigate_iter(value_to_check, sub_query).next().is_none() {
+                return DiveOutcome::Nothing;
+            }
+            dive(Paths {
+                starting_point: path.starting_point,
+                query: remaining_query,
+            })
+        }
+        (Step::And(sub_queries), Value::Mapping(_m)) => {
+            let value = path.starting_point;
+            let all_match = sub_queries
+                .iter()
+                .all(|q| dbg!(navigate_iter(value, q.clone()).next().is_some()));
+
+            if !all_match {
                 return DiveOutcome::Nothing;
             }
             dive(Paths {
@@ -525,6 +573,53 @@ mod tests {
         ];
 
         let finds_address = query!["people", "*", sub!("." => live_on_foo_street),];
+
+        let felipe: Vec<_> = navigate_iter(&yaml, finds_address).collect();
+        assert_eq!(felipe.len(), 1);
+    }
+
+    #[tracing_test::traced_test]
+    #[test]
+    fn logical_and_connecting_two_subqueries() {
+        let raw = indoc! {r#"
+            people:
+                - name: Felipe
+                  surname: Sere
+                  age: 32
+                  address:
+                    street: Foo
+                    postcode: 12345
+                    city: Legoland
+                  hobbies:
+                    - tennis
+                    - computer
+                - name: Charlotte
+                  surname: Fereday
+                  age: 31
+                  address:
+                    street: Bar
+                    postcode: 12345
+                    city: Legoland
+                  sports:
+                   - swimming
+                   - yoga
+            "#};
+        let yaml: Value = serde_yaml::from_str(raw).unwrap();
+
+        let finds_address = query![
+            "people",
+            "*",
+            and![
+                query!(
+                    "address",
+                    r#where!("street" => |name: String| name == "Foo")
+                ),
+                query!(
+                    "hobbies",
+                    r#where!("." => |hobby: String| hobby == "tennis")
+                ),
+            ]
+        ];
 
         let felipe: Vec<_> = navigate_iter(&yaml, finds_address).collect();
         assert_eq!(felipe.len(), 1);
