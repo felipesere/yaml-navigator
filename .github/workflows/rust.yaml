@@ -26,7 +26,7 @@ jobs:
         key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run cargo build 
-      run: cargo build --locked --release
+      run: cargo build --release
 
   unit-test:
     runs-on: ubuntu-latest
