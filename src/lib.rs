@@ -90,7 +90,7 @@ impl From<String> for Step {
         if value == "*" {
             Step::All
         } else {
-            Step::Field(value.into())
+            Step::Field(value)
         }
     }
 }
