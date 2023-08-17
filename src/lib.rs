@@ -606,7 +606,7 @@ mod tests {
             "#};
         let yaml: Value = serde_yaml::from_str(raw).unwrap();
 
-        let finds_address = query![
+        let age_of_people_living_on_foo_street_playing_tennis = query![
             "people",
             "*",
             and![
@@ -618,10 +618,12 @@ mod tests {
                     "hobbies",
                     r#where!("." => |hobby: String| hobby == "tennis")
                 ),
-            ]
+            ],
+            "age"
         ];
 
-        let felipe: Vec<_> = navigate_iter(&yaml, finds_address).collect();
-        assert_eq!(felipe.len(), 1);
+        let felipe: Vec<_> =
+            navigate_iter(&yaml, age_of_people_living_on_foo_street_playing_tennis).collect();
+        assert_eq!(felipe, vec![&serde_yaml::Value::Number(32.into())]);
     }
 }
