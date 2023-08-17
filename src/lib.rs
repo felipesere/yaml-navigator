@@ -47,6 +47,16 @@ macro_rules! and {
     }};
 }
 
+macro_rules! or {
+    ($($a:expr $(,)?)+) => {{
+        let mut arms: Vec<Query> = Vec::new();
+        $(
+            arms.push($a);
+        )+
+        Step::Or(arms)
+    }};
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Query {
     pub steps: Vec<Step>,
@@ -67,6 +77,7 @@ impl Query {
 pub enum Step {
     Field(String),
     And(Vec<Query>),
+    Or(Vec<Query>),
     At(usize),
     All,
     Filter(String, Arc<dyn Fn(&serde_yaml::Value) -> bool>),
@@ -108,6 +119,7 @@ impl Step {
         match self {
             Step::Field(_) => "field",
             Step::And(_) => "and",
+            Step::Or(_) => "or",
             Step::At(_) => "at",
             Step::Range(_) => "range",
             Step::All => "all",
@@ -153,6 +165,7 @@ impl std::fmt::Debug for Step {
         match self {
             Self::Field(arg0) => f.debug_tuple("Field").field(arg0).finish(),
             Self::And(arg0) => f.debug_tuple("And").field(arg0).finish(),
+            Self::Or(arg0) => f.debug_tuple("Or").field(arg0).finish(),
             Self::At(arg0) => f.debug_tuple("Index").field(arg0).finish(),
             Self::All => write!(f, "All"),
             Self::Range(r) => f.debug_tuple("Range").field(r).finish(),
@@ -319,9 +332,23 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_> {
             let value = path.starting_point;
             let all_match = sub_queries
                 .iter()
-                .all(|q| dbg!(navigate_iter(value, q.clone()).next().is_some()));
+                .all(|q| navigate_iter(value, q.clone()).next().is_some());
 
             if !all_match {
+                return DiveOutcome::Nothing;
+            }
+            dive(Paths {
+                starting_point: path.starting_point,
+                query: remaining_query,
+            })
+        }
+        (Step::Or(sub_queries), Value::Mapping(_m)) => {
+            let value = path.starting_point;
+            let any_match = sub_queries
+                .iter()
+                .any(|q| navigate_iter(value, q.clone()).next().is_some());
+
+            if !any_match {
                 return DiveOutcome::Nothing;
             }
             dive(Paths {
@@ -578,7 +605,6 @@ mod tests {
         assert_eq!(felipe.len(), 1);
     }
 
-    #[tracing_test::traced_test]
     #[test]
     fn logical_and_connecting_two_subqueries() {
         let raw = indoc! {r#"
@@ -625,5 +651,58 @@ mod tests {
         let felipe: Vec<_> =
             navigate_iter(&yaml, age_of_people_living_on_foo_street_playing_tennis).collect();
         assert_eq!(felipe, vec![&serde_yaml::Value::Number(32.into())]);
+    }
+
+    #[test]
+    fn logical_or_for_alternatives() {
+        let raw = indoc! {r#"
+            people:
+                - name: Felipe
+                  surname: Sere
+                  age: 32
+                  address:
+                    street: Foo
+                    postcode: 12345
+                    city: Legoland
+                  hobbies:
+                    - tennis
+                    - computer
+                - name: Charlotte
+                  surname: Fereday
+                  age: 31
+                  address:
+                    street: Bar
+                    postcode: 12345
+                    city: Legoland
+                  sports:
+                   - swimming
+                   - yoga
+            "#};
+        let yaml: Value = serde_yaml::from_str(raw).unwrap();
+
+        let computer_or_swimming = query![
+            "people",
+            "*",
+            or![
+                query!(
+                    "hobbies",
+                    r#where!("." => |name: String| name == "computer")
+                ),
+                query!(
+                    "sports",
+                    r#where!("." => |sport: String| sport == "swimming")
+                ),
+            ],
+            "age"
+        ];
+
+        let both: Vec<_> = navigate_iter(&yaml, computer_or_swimming).collect();
+        assert_eq!(
+            both,
+            vec![
+                &serde_yaml::Value::Number(32.into()),
+                &serde_yaml::Value::Number(31.into())
+            ]
+        );
     }
 }
