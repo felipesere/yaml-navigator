@@ -929,6 +929,7 @@ mod tests {
 
         let felipes_name = query![
             "people",
+            "*",
             r#where!("name" => |name: String| name == "Felipe"),
         ];
 
