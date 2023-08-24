@@ -13,3 +13,4 @@ tracing = "0.1.37"
 [dev-dependencies]
 indoc = "2.0.3"
 tracing-test = "0.2.4"
+expect-test = "*"
