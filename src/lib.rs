@@ -300,7 +300,7 @@ fn dive_mut(path: MutPaths<'_>) -> DiveOutcome<'_, MutPaths<'_>> {
                     val
                 } else {
                     let Some(value) = val.get_mut(&field) else {
-                        return DiveOutcome::Nothing
+                        return DiveOutcome::Nothing;
                     };
                     value
                 };
@@ -322,7 +322,7 @@ fn dive_mut(path: MutPaths<'_>) -> DiveOutcome<'_, MutPaths<'_>> {
                 val
             } else {
                 let Some(value) = val.as_mapping_mut().unwrap().get_mut(field) else {
-                    return DiveOutcome::Nothing
+                    return DiveOutcome::Nothing;
                 };
                 value
             };
@@ -341,7 +341,7 @@ fn dive_mut(path: MutPaths<'_>) -> DiveOutcome<'_, MutPaths<'_>> {
                 val
             } else {
                 let Some(value) = val.as_mapping_mut().unwrap().get_mut(field) else {
-                    return DiveOutcome::Nothing
+                    return DiveOutcome::Nothing;
                 };
                 value
             };
@@ -459,7 +459,7 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_, Paths> {
                     val
                 } else {
                     let Some(value) = val.get(&field) else {
-                        return DiveOutcome::Nothing
+                        return DiveOutcome::Nothing;
                     };
                     value
                 };
@@ -481,7 +481,7 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_, Paths> {
                 path.starting_point
             } else {
                 let Some(value) = m.get(field) else {
-                    return DiveOutcome::Nothing
+                    return DiveOutcome::Nothing;
                 };
                 value
             };
@@ -500,7 +500,7 @@ fn dive(path: Paths<'_>) -> DiveOutcome<'_, Paths> {
                 path.starting_point
             } else {
                 let Some(value) = m.get(field) else {
-                    return DiveOutcome::Nothing
+                    return DiveOutcome::Nothing;
                 };
                 value
             };
