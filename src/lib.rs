@@ -233,7 +233,7 @@ enum DiveOutcome<'input, P> {
     FinalMut(&'input mut Value),
     Branch(Vec<P>),
 }
-fn dive_mut<'input>(path: MutPaths<'input>) -> DiveOutcome<'input, MutPaths<'input>> {
+fn dive_mut(path: MutPaths<'_>) -> DiveOutcome<'_, MutPaths<'_>> {
     let Some((next_step, remaining_query)) = path.query.take_step() else {
         return DiveOutcome::FinalMut(path.starting_point);
     };
