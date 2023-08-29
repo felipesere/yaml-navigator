@@ -227,7 +227,7 @@ impl<'input> Iterator for ManyResults<'input> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct Address(Vec<LocationFragment>);
 
 #[derive(Clone)]
@@ -306,14 +306,6 @@ impl<'input> Iterator for ManyMutResults<'input> {
     type Item = &'input mut Value;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(address) = self.found_addresses.pop_front() {
-            let maybe = get_mut(self.root_node, &address);
-
-            if maybe.is_some() {
-                return None;
-                // return maybe;
-            }
-        }
         while let Some(path_to_explore) = self.candidates.pop_front() {
             match find_more_nodes(path_to_explore, self.root_node) {
                 FindingMoreNodes::Hits(addresses) => self.found_addresses.extend(addresses),
@@ -322,6 +314,13 @@ impl<'input> Iterator for ManyMutResults<'input> {
                 }
                 FindingMoreNodes::Nothing => {}
             };
+        }
+
+        while let Some(address) = self.found_addresses.pop_front() {
+            if let Some(found_node) = get_mut(self.root_node, &address) {
+                // Highly suspicious code right tgere!
+                return unsafe { Some(&mut *(found_node as *mut Value)) };
+            }
         }
         None
     }
@@ -738,11 +737,15 @@ pub fn navigate_iter(input: &Value, query: Query) -> ManyResults<'_> {
 }
 
 pub fn navigate_iter_mut(input: &mut Value, query: Query) -> ManyMutResults<'_> {
-    ManyMutResults {
+    let results = ManyMutResults {
         root_node: input,
-        candidates: VecDeque::default(),
+        candidates: VecDeque::from_iter([Candidate {
+            starting_point: Address::default(),
+            remaining_query: query,
+        }]),
         found_addresses: VecDeque::default(),
-    }
+    };
+    results
 }
 
 #[cfg(test)]
