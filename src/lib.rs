@@ -201,9 +201,9 @@ struct Paths<'input> {
     query: Query,
 }
 
-struct MutPath {
+struct Candidate {
     starting_point: Address,
-    query: Query,
+    remaining_query: Query,
 }
 
 pub struct ManyResults<'input> {
@@ -261,7 +261,7 @@ impl Address {
     }
 }
 
-pub fn get_mut<'a>(node: &'a mut Value, adr: &Address) -> Option<&'a mut Value> {
+fn get_mut<'a>(node: &'a mut Value, adr: &Address) -> Option<&'a mut Value> {
     use LocationFragment::*;
 
     let mut current_node = Some(node);
@@ -278,7 +278,7 @@ pub fn get_mut<'a>(node: &'a mut Value, adr: &Address) -> Option<&'a mut Value> 
     current_node
 }
 
-pub fn get<'a>(node: &'a Value, adr: &Address) -> Option<&'a Value> {
+fn get<'a>(node: &'a Value, adr: &Address) -> Option<&'a Value> {
     use LocationFragment::*;
 
     let mut current_node = Some(node);
@@ -296,9 +296,9 @@ pub fn get<'a>(node: &'a Value, adr: &Address) -> Option<&'a Value> {
 }
 
 pub struct ManyMutResults<'input> {
-    paths_to_explore: VecDeque<MutPath>,
+    candidates: VecDeque<Candidate>,
     // the addresses here have to be relative to the root
-    nodes_to_yield: VecDeque<Address>,
+    found_addresses: VecDeque<Address>,
     root_node: &'input mut Value,
 }
 
@@ -306,23 +306,19 @@ impl<'input> Iterator for ManyMutResults<'input> {
     type Item = &'input mut Value;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(address) = self.nodes_to_yield.pop_front() {
+        while let Some(address) = self.found_addresses.pop_front() {
             let maybe = get_mut(self.root_node, &address);
 
             if maybe.is_some() {
-                return maybe;
+                return None;
+                // return maybe;
             }
         }
-
-        while let Some(path_to_explore) = self.paths_to_explore.pop_front() {
-            match find_more_nodes(
-                path_to_explore,
-                self.root_node,
-                // <--- REALLY WEIRD?
-            ) {
-                FindingMoreNodes::Hits(addresses) => self.nodes_to_yield.extend(addresses),
-                FindingMoreNodes::Branching(more_paths_to_consider) => {
-                    self.paths_to_explore.extend(more_paths_to_consider);
+        while let Some(path_to_explore) = self.candidates.pop_front() {
+            match find_more_nodes(path_to_explore, self.root_node) {
+                FindingMoreNodes::Hits(addresses) => self.found_addresses.extend(addresses),
+                FindingMoreNodes::Branching(more_candidates) => {
+                    self.candidates.extend(more_candidates);
                 }
                 FindingMoreNodes::Nothing => {}
             };
@@ -333,14 +329,14 @@ impl<'input> Iterator for ManyMutResults<'input> {
 
 enum FindingMoreNodes {
     Hits(Vec<Address>),
-    Branching(Vec<MutPath>),
+    Branching(Vec<Candidate>),
     Nothing,
 }
 
-fn find_more_nodes(path: MutPath, root: &Value) -> FindingMoreNodes {
+fn find_more_nodes(path: Candidate, root: &Value) -> FindingMoreNodes {
     let current_address = path.starting_point;
     // Are we at the end of the query?
-    let Some((next_step, remaining_query)) = path.query.take_step() else {
+    let Some((next_step, remaining_query)) = path.remaining_query.take_step() else {
         return FindingMoreNodes::Hits(vec![current_address]);
     };
 
@@ -355,9 +351,9 @@ fn find_more_nodes(path: MutPath, root: &Value) -> FindingMoreNodes {
                 return FindingMoreNodes::Nothing;
             };
             find_more_nodes(
-                MutPath {
+                Candidate {
                     starting_point: current_address.extend(&f),
-                    query: remaining_query,
+                    remaining_query,
                 },
                 root,
             )
@@ -367,9 +363,9 @@ fn find_more_nodes(path: MutPath, root: &Value) -> FindingMoreNodes {
                 return FindingMoreNodes::Nothing;
             };
             find_more_nodes(
-                MutPath {
+                Candidate {
                     starting_point: current_address.extend(idx),
-                    query: remaining_query,
+                    remaining_query,
                 },
                 root,
             )
@@ -377,9 +373,9 @@ fn find_more_nodes(path: MutPath, root: &Value) -> FindingMoreNodes {
         (Step::Range(r), Value::Sequence(_)) => {
             let mut additional_paths = Vec::new();
             for point in r {
-                additional_paths.push(MutPath {
+                additional_paths.push(Candidate {
                     starting_point: current_address.extend(point),
-                    query: remaining_query.clone(),
+                    remaining_query: remaining_query.clone(),
                 });
             }
             FindingMoreNodes::Branching(additional_paths)
@@ -387,9 +383,9 @@ fn find_more_nodes(path: MutPath, root: &Value) -> FindingMoreNodes {
         (Step::All, Value::Sequence(sequence)) => {
             let mut additional_paths = Vec::new();
             for point in 0..sequence.len() {
-                additional_paths.push(MutPath {
+                additional_paths.push(Candidate {
                     starting_point: current_address.extend(point),
-                    query: remaining_query.clone(),
+                    remaining_query: remaining_query.clone(),
                 });
             }
             FindingMoreNodes::Branching(additional_paths)
@@ -404,9 +400,9 @@ fn find_more_nodes(path: MutPath, root: &Value) -> FindingMoreNodes {
             }
 
             find_more_nodes(
-                MutPath {
+                Candidate {
                     starting_point: current_address.extend(&field),
-                    query: remaining_query,
+                    remaining_query,
                 },
                 root,
             )
@@ -427,9 +423,9 @@ fn find_more_nodes(path: MutPath, root: &Value) -> FindingMoreNodes {
                     continue;
                 }
 
-                additional_paths.push(MutPath {
+                additional_paths.push(Candidate {
                     starting_point: current_address.extend(idx),
-                    query: remaining_query.clone(),
+                    remaining_query: remaining_query.clone(),
                 })
             }
 
@@ -450,9 +446,9 @@ fn find_more_nodes(path: MutPath, root: &Value) -> FindingMoreNodes {
             }
 
             find_more_nodes(
-                MutPath {
+                Candidate {
                     starting_point: current_address.extend(&field),
-                    query: remaining_query,
+                    remaining_query,
                 },
                 root,
             )
@@ -471,9 +467,9 @@ fn find_more_nodes(path: MutPath, root: &Value) -> FindingMoreNodes {
                 return FindingMoreNodes::Nothing;
             }
             find_more_nodes(
-                MutPath {
+                Candidate {
                     starting_point: current_address.extend(&field),
-                    query: remaining_query,
+                    remaining_query,
                 },
                 root,
             )
@@ -488,9 +484,9 @@ fn find_more_nodes(path: MutPath, root: &Value) -> FindingMoreNodes {
                 return FindingMoreNodes::Nothing;
             }
             find_more_nodes(
-                MutPath {
+                Candidate {
                     starting_point: current_address.clone(),
-                    query: remaining_query,
+                    remaining_query,
                 },
                 root,
             )
@@ -505,9 +501,9 @@ fn find_more_nodes(path: MutPath, root: &Value) -> FindingMoreNodes {
                 return FindingMoreNodes::Nothing;
             }
             find_more_nodes(
-                MutPath {
+                Candidate {
                     starting_point: current_address.clone(),
-                    query: remaining_query,
+                    remaining_query,
                 },
                 root,
             )
@@ -744,8 +740,8 @@ pub fn navigate_iter(input: &Value, query: Query) -> ManyResults<'_> {
 pub fn navigate_iter_mut(input: &mut Value, query: Query) -> ManyMutResults<'_> {
     ManyMutResults {
         root_node: input,
-        paths_to_explore: VecDeque::default(),
-        nodes_to_yield: VecDeque::default(),
+        candidates: VecDeque::default(),
+        found_addresses: VecDeque::default(),
     }
 }
 
