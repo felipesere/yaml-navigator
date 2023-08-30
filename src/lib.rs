@@ -259,6 +259,12 @@ impl Address {
         this.0.push(fragment.into());
         this
     }
+
+    fn append(&self, mut relative_address: Address) -> Address {
+        let mut this = self.clone();
+        this.0.append(&mut relative_address.0);
+        this
+    }
 }
 
 fn get_mut<'a>(node: &'a mut Value, adr: &Address) -> Option<&'a mut Value> {
@@ -507,23 +513,18 @@ fn find_more_nodes(path: Candidate, root: &Value) -> FindingMoreNodes {
                 root,
             )
         }
-        (Step::Branch(_sub_queries), _value @ Value::Mapping(_)) => {
-            FindingMoreNodes::Nothing
-            // not sure how to do this yet.
-            // I need to get the final address of the
-            // node the query got to... will need to figure this out.
-            //
-            // let mut additional_paths = Vec::new();
-            // for sub_query in sub_queries {
-            //     for node in navigate_iter_mut(&mut value, sub_query) {
-            //         additional_paths.push(MutPath {
-            //             starting_point: node,
-            //             query: remaining_query.clone(),
-            //         })
-            //     }
-            // }
+        (Step::Branch(sub_queries), value @ Value::Mapping(_)) => {
+            let mut additional_paths = Vec::new();
+            for sub_query in sub_queries {
+                for relative_address in relevant_addresses(&value, sub_query) {
+                    additional_paths.push(Candidate {
+                        starting_point: current_address.append(relative_address),
+                        remaining_query: remaining_query.clone(),
+                    })
+                }
+            }
 
-            // DiveOutcome::Branch(additional_paths)
+            FindingMoreNodes::Branching(additional_paths)
         }
         (step, value) => {
             let step = step.name();
@@ -533,6 +534,22 @@ fn find_more_nodes(path: Candidate, root: &Value) -> FindingMoreNodes {
             FindingMoreNodes::Nothing
         }
     }
+}
+
+fn relevant_addresses(node: &Value, query: Query) -> Vec<Address> {
+    let mut found_addresses = Vec::new();
+    let mut candidates = VecDeque::from_iter([Candidate {
+        starting_point: Address::default(),
+        remaining_query: query,
+    }]);
+    while let Some(candidate) = candidates.pop_front() {
+        match find_more_nodes(candidate, node) {
+            FindingMoreNodes::Hits(addresses) => found_addresses.extend(addresses),
+            FindingMoreNodes::Branching(more_candidates) => candidates.extend(more_candidates),
+            FindingMoreNodes::Nothing => {}
+        };
+    }
+    found_addresses
 }
 
 enum DiveOutcome<'input, P> {
