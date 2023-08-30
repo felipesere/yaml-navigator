@@ -6,6 +6,8 @@ use std::sync::Arc;
 use serde::de::DeserializeOwned;
 use serde_yaml::Value;
 
+mod iter_address;
+
 macro_rules! step {
     ("*") => {
         Step::All
@@ -254,13 +256,13 @@ impl From<usize> for LocationFragment {
 }
 
 impl Address {
-    fn extend(&self, fragment: impl Into<LocationFragment>) -> Address {
+    pub(crate) fn extend(&self, fragment: impl Into<LocationFragment>) -> Address {
         let mut this = self.clone();
         this.0.push(fragment.into());
         this
     }
 
-    fn append(&self, mut relative_address: Address) -> Address {
+    pub(crate) fn append(&self, mut relative_address: Address) -> Address {
         let mut this = self.clone();
         this.0.append(&mut relative_address.0);
         this
