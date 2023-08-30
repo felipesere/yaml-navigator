@@ -272,12 +272,10 @@ fn get_mut<'a>(node: &'a mut Value, adr: &Address) -> Option<&'a mut Value> {
 
     let mut current_node = Some(node);
     for fragment in &adr.0 {
-        if current_node.is_none() {
-            return None;
-        }
+        let actual_node = current_node?;
         match fragment {
-            Field(f) => current_node = current_node.take().and_then(|node| node.get_mut(f)),
-            Index(i) => current_node = current_node.take().and_then(|node| node.get_mut(i)),
+            Field(f) => current_node = actual_node.get_mut(f),
+            Index(i) => current_node = actual_node.get_mut(i),
         }
     }
 
@@ -289,12 +287,10 @@ fn get<'a>(node: &'a Value, adr: &Address) -> Option<&'a Value> {
 
     let mut current_node = Some(node);
     for fragment in &adr.0 {
-        if current_node.is_none() {
-            return None;
-        }
+        let actual_node = current_node?;
         match fragment {
-            Field(f) => current_node = current_node.take().and_then(|node| node.get(f)),
-            Index(i) => current_node = current_node.take().and_then(|node| node.get(i)),
+            Field(f) => current_node = actual_node.get(f),
+            Index(i) => current_node = actual_node.get(i),
         }
     }
 
@@ -516,7 +512,7 @@ fn find_more_nodes(path: Candidate, root: &Value) -> FindingMoreNodes {
         (Step::Branch(sub_queries), value @ Value::Mapping(_)) => {
             let mut additional_paths = Vec::new();
             for sub_query in sub_queries {
-                for relative_address in relevant_addresses(&value, sub_query) {
+                for relative_address in relevant_addresses(value, sub_query) {
                     additional_paths.push(Candidate {
                         starting_point: current_address.append(relative_address),
                         remaining_query: remaining_query.clone(),
@@ -754,15 +750,14 @@ pub fn navigate_iter(input: &Value, query: Query) -> ManyResults<'_> {
 }
 
 pub fn navigate_iter_mut(input: &mut Value, query: Query) -> ManyMutResults<'_> {
-    let results = ManyMutResults {
+    ManyMutResults {
         root_node: input,
         candidates: VecDeque::from_iter([Candidate {
             starting_point: Address::default(),
             remaining_query: query,
         }]),
         found_addresses: VecDeque::default(),
-    };
-    results
+    }
 }
 
 #[cfg(test)]
