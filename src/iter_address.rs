@@ -23,7 +23,7 @@ pub(crate) fn iter<'input>(root_node: &'input Value, query: Query) -> AddressIte
 }
 
 enum FindingMoreNodes {
-    Hits(Vec<Address>),
+    Hit(Address),
     Branching(Vec<Candidate>),
     Nothing,
 }
@@ -37,7 +37,7 @@ impl<'input> Iterator for AddressIterator<'input> {
 
         while let Some(path_to_explore) = self.candidates.pop_front() {
             match find_more_addresses(path_to_explore, self.root_node) {
-                FindingMoreNodes::Hits(addresses) => self.found_addresses.extend(addresses),
+                FindingMoreNodes::Hit(address) => self.found_addresses.push_back(address),
                 FindingMoreNodes::Branching(more_candidates) => {
                     self.candidates.extend(more_candidates);
                 }
@@ -53,7 +53,7 @@ fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreNodes {
     let current_address = path.starting_point;
     // Are we at the end of the query?
     let Some((next_step, remaining_query)) = path.remaining_query.take_step() else {
-        return FindingMoreNodes::Hits(vec![current_address]);
+        return FindingMoreNodes::Hit(current_address);
     };
 
     // if not, can we get the node for the current address?
