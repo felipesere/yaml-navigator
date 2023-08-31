@@ -3,7 +3,6 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 
-use iter_address::AddressIterator;
 use serde::de::DeserializeOwned;
 use serde_yaml::Value;
 
@@ -301,20 +300,31 @@ fn get<'a>(node: &'a Value, adr: &Address) -> Option<&'a Value> {
 }
 
 pub struct ManyMutResults<'input> {
+    candidates: VecDeque<Candidate>,
+    // the addresses here have to be relative to the root
+    found_addresses: VecDeque<Address>,
     root_node: &'input mut Value,
-    addresses: AddressIterator<'input>,
 }
 
 impl<'input> Iterator for ManyMutResults<'input> {
     type Item = &'input mut Value;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let Some(address) = self.addresses.next() else {
-            return None;
-        };
-        if let Some(found_node) = get_mut(self.root_node, &address) {
-            // Highly suspicious code right tgere!
-            return unsafe { Some(&mut *(found_node as *mut Value)) };
+        while let Some(path_to_explore) = self.candidates.pop_front() {
+            match find_more_nodes(path_to_explore, self.root_node) {
+                FindingMoreNodes::Hits(addresses) => self.found_addresses.extend(addresses),
+                FindingMoreNodes::Branching(more_candidates) => {
+                    self.candidates.extend(more_candidates);
+                }
+                FindingMoreNodes::Nothing => {}
+            };
+        }
+
+        while let Some(address) = self.found_addresses.pop_front() {
+            if let Some(found_node) = get_mut(self.root_node, &address) {
+                // Highly suspicious code right tgere!
+                return unsafe { Some(&mut *(found_node as *mut Value)) };
+            }
         }
         None
     }
@@ -744,7 +754,11 @@ pub fn navigate_iter(input: &Value, query: Query) -> ManyResults<'_> {
 pub fn navigate_iter_mut(input: &mut Value, query: Query) -> ManyMutResults<'_> {
     ManyMutResults {
         root_node: input,
-        addresses: iter_address::iter(input, query.clone()),
+        candidates: VecDeque::from_iter([Candidate {
+            starting_point: Address::default(),
+            remaining_query: query,
+        }]),
+        found_addresses: VecDeque::default(),
     }
 }
 

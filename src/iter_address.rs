@@ -4,14 +4,14 @@ use serde_yaml::Value;
 
 use crate::{get, value_name, Address, Candidate, Query, Step};
 
-pub(crate) struct AddressIterator<'input> {
+struct AddressIterator<'input> {
     candidates: VecDeque<Candidate>,
     // the addresses here have to be relative to the root
     found_addresses: VecDeque<Address>,
     root_node: &'input Value,
 }
 
-pub(crate) fn iter<'input>(root_node: &'input Value, query: Query) -> AddressIterator<'input> {
+fn iter<'input>(root_node: &'input Value, query: Query) -> AddressIterator<'input> {
     AddressIterator {
         candidates: VecDeque::from_iter([Candidate {
             starting_point: Address::default(),
