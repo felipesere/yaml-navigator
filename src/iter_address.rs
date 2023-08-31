@@ -13,39 +13,39 @@ fn matching_addresses(root_node: &Value, query: Query) -> Vec<Address> {
 
     while let Some(path_to_explore) = candidates.pop_front() {
         match find_more_addresses(path_to_explore, root_node) {
-            FindingMoreNodes::Hit(address) => addresses.push(address),
-            FindingMoreNodes::Branching(more_candidates) => {
+            FindAddresses::Hit(address) => addresses.push(address),
+            FindAddresses::Branching(more_candidates) => {
                 candidates.extend(more_candidates);
             }
-            FindingMoreNodes::Nothing => {}
+            FindAddresses::Nothing => {}
         };
     }
 
     addresses
 }
 
-pub(crate) enum FindingMoreNodes {
+pub(crate) enum FindAddresses {
     Hit(Address),
     Branching(Vec<Candidate>),
     Nothing,
 }
 
-pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreNodes {
+pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindAddresses {
     let current_address = path.starting_point;
     // Are we at the end of the query?
     let Some((next_step, remaining_query)) = path.remaining_query.take_step() else {
-        return FindingMoreNodes::Hit(current_address);
+        return FindAddresses::Hit(current_address);
     };
 
     // if not, can we get the node for the current address?
     let Some(node) = get(root, &current_address) else {
-        return FindingMoreNodes::Nothing;
+        return FindAddresses::Nothing;
     };
 
     match (next_step, node) {
         (Step::Field(f), Value::Mapping(m)) => {
             if m.get(&f).is_none() {
-                return FindingMoreNodes::Nothing;
+                return FindAddresses::Nothing;
             };
             find_more_addresses(
                 Candidate {
@@ -57,7 +57,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreN
         }
         (Step::At(idx), Value::Sequence(s)) => {
             if s.get(idx).is_none() {
-                return FindingMoreNodes::Nothing;
+                return FindAddresses::Nothing;
             };
             find_more_addresses(
                 Candidate {
@@ -75,7 +75,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreN
                     remaining_query: remaining_query.clone(),
                 });
             }
-            FindingMoreNodes::Branching(additional_paths)
+            FindAddresses::Branching(additional_paths)
         }
         (Step::All, Value::Sequence(sequence)) => {
             let mut additional_paths = Vec::new();
@@ -85,15 +85,15 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreN
                     remaining_query: remaining_query.clone(),
                 });
             }
-            FindingMoreNodes::Branching(additional_paths)
+            FindAddresses::Branching(additional_paths)
         }
         (Step::Filter(field, predicate), s @ Value::String(_)) => {
             if field != "." {
-                return FindingMoreNodes::Nothing;
+                return FindAddresses::Nothing;
             }
 
             if !predicate(s) {
-                return FindingMoreNodes::Nothing;
+                return FindAddresses::Nothing;
             }
 
             find_more_addresses(
@@ -111,7 +111,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreN
                     val
                 } else {
                     let Some(value) = val.get(&field) else {
-                        return FindingMoreNodes::Nothing;
+                        return FindAddresses::Nothing;
                     };
                     value
                 };
@@ -126,20 +126,20 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreN
                 })
             }
 
-            FindingMoreNodes::Branching(additional_paths)
+            FindAddresses::Branching(additional_paths)
         }
         (Step::Filter(field, predicate), val @ Value::Mapping(_)) => {
             let value_to_check = if field == "." {
                 val
             } else {
                 let Some(value) = val.as_mapping().unwrap().get(&field) else {
-                    return FindingMoreNodes::Nothing;
+                    return FindAddresses::Nothing;
                 };
                 value
             };
 
             if !predicate(value_to_check) {
-                return FindingMoreNodes::Nothing;
+                return FindAddresses::Nothing;
             }
 
             find_more_addresses(
@@ -155,13 +155,13 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreN
                 val
             } else {
                 let Some(value) = val.as_mapping().unwrap().get(&field) else {
-                    return FindingMoreNodes::Nothing;
+                    return FindAddresses::Nothing;
                 };
                 value
             };
 
             if matching_addresses(value_to_check, sub_query).is_empty() {
-                return FindingMoreNodes::Nothing;
+                return FindAddresses::Nothing;
             }
             find_more_addresses(
                 Candidate {
@@ -178,7 +178,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreN
                 .all(|q| !matching_addresses(value, q.clone()).is_empty());
 
             if !all_match {
-                return FindingMoreNodes::Nothing;
+                return FindAddresses::Nothing;
             }
             find_more_addresses(
                 Candidate {
@@ -195,7 +195,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreN
                 .any(|q| !matching_addresses(value, q.clone()).is_empty());
 
             if !any_match {
-                return FindingMoreNodes::Nothing;
+                return FindAddresses::Nothing;
             }
             find_more_addresses(
                 Candidate {
@@ -216,14 +216,14 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreN
                 }
             }
 
-            FindingMoreNodes::Branching(additional_paths)
+            FindAddresses::Branching(additional_paths)
         }
         (step, value) => {
             let step = step.name();
             let value = value_name(value);
             tracing::warn!("'{step}' not supported for '{value}'",);
 
-            FindingMoreNodes::Nothing
+            FindAddresses::Nothing
         }
     }
 }

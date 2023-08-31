@@ -5,7 +5,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::iter_address::find_more_addresses;
-use iter_address::FindingMoreNodes;
+use iter_address::FindAddresses;
 use serde::de::DeserializeOwned;
 use serde_yaml::Value;
 
@@ -217,16 +217,16 @@ impl<'input> Iterator for ManyResults<'input> {
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(path_to_explore) = self.candidates.pop_front() {
             match find_more_addresses(path_to_explore, self.root_node) {
-                FindingMoreNodes::Hit(address) => {
+                FindAddresses::Hit(address) => {
                     let node = get(self.root_node, &address);
                     if node.is_some() {
                         return node;
                     }
                 }
-                FindingMoreNodes::Branching(more_candidates) => {
+                FindAddresses::Branching(more_candidates) => {
                     self.candidates.extend(more_candidates);
                 }
-                FindingMoreNodes::Nothing => {}
+                FindAddresses::Nothing => {}
             };
         }
 
@@ -339,13 +339,13 @@ impl<'input> Iterator for ManyMutResults<'input> {
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(path_to_explore) = self.candidates.pop_front() {
             match find_more_addresses(path_to_explore, self.root_node) {
-                FindingMoreNodes::Hit(address) => {
+                FindAddresses::Hit(address) => {
                     self.found_addresses.push_back(address);
                 }
-                FindingMoreNodes::Branching(more_candidates) => {
+                FindAddresses::Branching(more_candidates) => {
                     self.candidates.extend(more_candidates);
                 }
-                FindingMoreNodes::Nothing => {}
+                FindAddresses::Nothing => {}
             };
         }
 
