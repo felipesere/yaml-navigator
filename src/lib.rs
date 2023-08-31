@@ -1,15 +1,15 @@
 #![allow(unused_macros)]
 use std::collections::VecDeque;
-use std::fmt::Write;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::iter_address::find_more_addresses;
-use iter_address::FindAddresses;
+use address::{find_more_addresses, Address, FindAddresses};
 use serde::de::DeserializeOwned;
 use serde_yaml::Value;
 
-mod iter_address;
+use crate::address::LocationFragment;
+
+mod address;
 
 macro_rules! step {
     ("*") => {
@@ -231,66 +231,6 @@ impl<'input> Iterator for ManyResults<'input> {
         }
 
         None
-    }
-}
-
-#[derive(Clone, Default, Debug)]
-struct Address(Vec<LocationFragment>);
-
-impl std::fmt::Display for Address {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for location in &self.0 {
-            f.write_char('.')?;
-            location.fmt(f)?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug)]
-enum LocationFragment {
-    Field(String),
-    Index(usize),
-}
-
-impl std::fmt::Display for LocationFragment {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LocationFragment::Field(s) => f.write_str(s),
-            LocationFragment::Index(i) => f.write_str(i.to_string().as_str()),
-        }
-    }
-}
-
-impl From<&String> for LocationFragment {
-    fn from(value: &String) -> Self {
-        Self::Field(value.clone())
-    }
-}
-
-impl From<String> for LocationFragment {
-    fn from(value: String) -> Self {
-        Self::Field(value)
-    }
-}
-
-impl From<usize> for LocationFragment {
-    fn from(value: usize) -> Self {
-        Self::Index(value)
-    }
-}
-
-impl Address {
-    pub(crate) fn extend(&self, fragment: impl Into<LocationFragment>) -> Address {
-        let mut this = self.clone();
-        this.0.push(fragment.into());
-        this
-    }
-
-    pub(crate) fn append(&self, mut relative_address: Address) -> Address {
-        let mut this = self.clone();
-        this.0.append(&mut relative_address.0);
-        this
     }
 }
 

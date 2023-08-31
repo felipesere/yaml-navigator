@@ -1,8 +1,69 @@
 use std::collections::VecDeque;
+use std::fmt::Write;
 
 use serde_yaml::Value;
 
-use crate::{get, value_name, Address, Candidate, Query, Step};
+use crate::{get, value_name, Candidate, Query, Step};
+
+#[derive(Clone, Default, Debug)]
+pub(crate) struct Address(pub(crate) Vec<LocationFragment>);
+
+impl std::fmt::Display for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for location in &self.0 {
+            f.write_char('.')?;
+            location.fmt(f)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum LocationFragment {
+    Field(String),
+    Index(usize),
+}
+
+impl std::fmt::Display for LocationFragment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LocationFragment::Field(s) => f.write_str(s),
+            LocationFragment::Index(i) => f.write_str(i.to_string().as_str()),
+        }
+    }
+}
+
+impl From<&String> for LocationFragment {
+    fn from(value: &String) -> Self {
+        Self::Field(value.clone())
+    }
+}
+
+impl From<String> for LocationFragment {
+    fn from(value: String) -> Self {
+        Self::Field(value)
+    }
+}
+
+impl From<usize> for LocationFragment {
+    fn from(value: usize) -> Self {
+        Self::Index(value)
+    }
+}
+
+impl Address {
+    pub(crate) fn extend(&self, fragment: impl Into<LocationFragment>) -> Address {
+        let mut this = self.clone();
+        this.0.push(fragment.into());
+        this
+    }
+
+    pub(crate) fn append(&self, mut relative_address: Address) -> Address {
+        let mut this = self.clone();
+        this.0.append(&mut relative_address.0);
+        this
+    }
+}
 
 fn matching_addresses(root_node: &Value, query: Query) -> Vec<Address> {
     let mut candidates = VecDeque::from_iter([Candidate {
