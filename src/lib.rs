@@ -1,8 +1,11 @@
 #![allow(unused_macros)]
 use std::collections::VecDeque;
+use std::fmt::Write;
 use std::ops::Range;
 use std::sync::Arc;
 
+use crate::iter_address::find_more_addresses;
+use iter_address::FindingMoreNodes;
 use serde::de::DeserializeOwned;
 use serde_yaml::Value;
 
@@ -232,10 +235,29 @@ impl<'input> Iterator for ManyResults<'input> {
 #[derive(Clone, Default)]
 struct Address(Vec<LocationFragment>);
 
+impl std::fmt::Display for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for location in &self.0 {
+            f.write_char('.')?;
+            location.fmt(f)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 enum LocationFragment {
     Field(String),
     Index(usize),
+}
+
+impl std::fmt::Display for LocationFragment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LocationFragment::Field(s) => f.write_str(s),
+            LocationFragment::Index(i) => f.write_str(i.to_string().as_str()),
+        }
+    }
 }
 
 impl From<&String> for LocationFragment {
@@ -311,8 +333,10 @@ impl<'input> Iterator for ManyMutResults<'input> {
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(path_to_explore) = self.candidates.pop_front() {
-            match find_more_nodes(path_to_explore, self.root_node) {
-                FindingMoreNodes::Hits(addresses) => self.found_addresses.extend(addresses),
+            match find_more_addresses(path_to_explore, self.root_node) {
+                FindingMoreNodes::Hit(address) => {
+                    self.found_addresses.push_back(address);
+                }
                 FindingMoreNodes::Branching(more_candidates) => {
                     self.candidates.extend(more_candidates);
                 }
@@ -328,226 +352,6 @@ impl<'input> Iterator for ManyMutResults<'input> {
         }
         None
     }
-}
-
-enum FindingMoreNodes {
-    Hits(Vec<Address>),
-    Branching(Vec<Candidate>),
-    Nothing,
-}
-
-fn find_more_nodes(path: Candidate, root: &Value) -> FindingMoreNodes {
-    let current_address = path.starting_point;
-    // Are we at the end of the query?
-    let Some((next_step, remaining_query)) = path.remaining_query.take_step() else {
-        return FindingMoreNodes::Hits(vec![current_address]);
-    };
-
-    // if not, can we get the node for the current address?
-    let Some(node) = get(root, &current_address) else {
-        return FindingMoreNodes::Nothing;
-    };
-
-    match (next_step, node) {
-        (Step::Field(f), Value::Mapping(m)) => {
-            if m.get(&f).is_none() {
-                return FindingMoreNodes::Nothing;
-            };
-            find_more_nodes(
-                Candidate {
-                    starting_point: current_address.extend(&f),
-                    remaining_query,
-                },
-                root,
-            )
-        }
-        (Step::At(idx), Value::Sequence(s)) => {
-            if s.get(idx).is_none() {
-                return FindingMoreNodes::Nothing;
-            };
-            find_more_nodes(
-                Candidate {
-                    starting_point: current_address.extend(idx),
-                    remaining_query,
-                },
-                root,
-            )
-        }
-        (Step::Range(r), Value::Sequence(_)) => {
-            let mut additional_paths = Vec::new();
-            for point in r {
-                additional_paths.push(Candidate {
-                    starting_point: current_address.extend(point),
-                    remaining_query: remaining_query.clone(),
-                });
-            }
-            FindingMoreNodes::Branching(additional_paths)
-        }
-        (Step::All, Value::Sequence(sequence)) => {
-            let mut additional_paths = Vec::new();
-            for point in 0..sequence.len() {
-                additional_paths.push(Candidate {
-                    starting_point: current_address.extend(point),
-                    remaining_query: remaining_query.clone(),
-                });
-            }
-            FindingMoreNodes::Branching(additional_paths)
-        }
-        (Step::Filter(field, predicate), s @ Value::String(_)) => {
-            if field != "." {
-                return FindingMoreNodes::Nothing;
-            }
-
-            if !predicate(s) {
-                return FindingMoreNodes::Nothing;
-            }
-
-            find_more_nodes(
-                Candidate {
-                    starting_point: current_address.extend(&field),
-                    remaining_query,
-                },
-                root,
-            )
-        }
-        (Step::Filter(field, predicate), Value::Sequence(sequence)) => {
-            let mut additional_paths = Vec::new();
-            for (idx, val) in sequence.iter().enumerate() {
-                let value_to_check = if field == "." {
-                    val
-                } else {
-                    let Some(value) = val.get(&field) else {
-                        return FindingMoreNodes::Nothing;
-                    };
-                    value
-                };
-
-                if !predicate(value_to_check) {
-                    continue;
-                }
-
-                additional_paths.push(Candidate {
-                    starting_point: current_address.extend(idx),
-                    remaining_query: remaining_query.clone(),
-                })
-            }
-
-            FindingMoreNodes::Branching(additional_paths)
-        }
-        (Step::Filter(field, predicate), val @ Value::Mapping(_)) => {
-            let value_to_check = if field == "." {
-                val
-            } else {
-                let Some(value) = val.as_mapping().unwrap().get(&field) else {
-                    return FindingMoreNodes::Nothing;
-                };
-                value
-            };
-
-            if !predicate(value_to_check) {
-                return FindingMoreNodes::Nothing;
-            }
-
-            find_more_nodes(
-                Candidate {
-                    starting_point: current_address.extend(&field),
-                    remaining_query,
-                },
-                root,
-            )
-        }
-        (Step::SubQuery(field, sub_query), val @ Value::Mapping(_)) => {
-            let value_to_check = if field == "." {
-                val
-            } else {
-                let Some(value) = val.as_mapping().unwrap().get(&field) else {
-                    return FindingMoreNodes::Nothing;
-                };
-                value
-            };
-
-            if navigate_iter(value_to_check, sub_query).next().is_none() {
-                return FindingMoreNodes::Nothing;
-            }
-            find_more_nodes(
-                Candidate {
-                    starting_point: current_address.extend(&field),
-                    remaining_query,
-                },
-                root,
-            )
-        }
-        (Step::And(sub_queries), val @ Value::Mapping(_)) => {
-            let value = val;
-            let all_match = sub_queries
-                .iter()
-                .all(|q| navigate_iter(value, q.clone()).next().is_some());
-
-            if !all_match {
-                return FindingMoreNodes::Nothing;
-            }
-            find_more_nodes(
-                Candidate {
-                    starting_point: current_address.clone(),
-                    remaining_query,
-                },
-                root,
-            )
-        }
-        (Step::Or(sub_queries), val @ Value::Mapping(_)) => {
-            let value = val;
-            let any_match = sub_queries
-                .iter()
-                .any(|q| navigate_iter(value, q.clone()).next().is_some());
-
-            if !any_match {
-                return FindingMoreNodes::Nothing;
-            }
-            find_more_nodes(
-                Candidate {
-                    starting_point: current_address.clone(),
-                    remaining_query,
-                },
-                root,
-            )
-        }
-        (Step::Branch(sub_queries), value @ Value::Mapping(_)) => {
-            let mut additional_paths = Vec::new();
-            for sub_query in sub_queries {
-                for relative_address in relevant_addresses(value, sub_query) {
-                    additional_paths.push(Candidate {
-                        starting_point: current_address.append(relative_address),
-                        remaining_query: remaining_query.clone(),
-                    })
-                }
-            }
-
-            FindingMoreNodes::Branching(additional_paths)
-        }
-        (step, value) => {
-            let step = step.name();
-            let value = value_name(value);
-            tracing::warn!("'{step}' not supported for '{value}'",);
-
-            FindingMoreNodes::Nothing
-        }
-    }
-}
-
-fn relevant_addresses(node: &Value, query: Query) -> Vec<Address> {
-    let mut found_addresses = Vec::new();
-    let mut candidates = VecDeque::from_iter([Candidate {
-        starting_point: Address::default(),
-        remaining_query: query,
-    }]);
-    while let Some(candidate) = candidates.pop_front() {
-        match find_more_nodes(candidate, node) {
-            FindingMoreNodes::Hits(addresses) => found_addresses.extend(addresses),
-            FindingMoreNodes::Branching(more_candidates) => candidates.extend(more_candidates),
-            FindingMoreNodes::Nothing => {}
-        };
-    }
-    found_addresses
 }
 
 enum DiveOutcome<'input, P> {

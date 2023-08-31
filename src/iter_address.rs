@@ -7,22 +7,20 @@ use crate::{get, value_name, Address, Candidate, Query, Step};
 struct AddressIterator<'input> {
     candidates: VecDeque<Candidate>,
     // the addresses here have to be relative to the root
-    found_addresses: VecDeque<Address>,
     root_node: &'input Value,
 }
 
-fn iter<'input>(root_node: &'input Value, query: Query) -> AddressIterator<'input> {
+fn iter(root_node: &Value, query: Query) -> AddressIterator {
     AddressIterator {
         candidates: VecDeque::from_iter([Candidate {
             starting_point: Address::default(),
             remaining_query: query,
         }]),
-        found_addresses: VecDeque::default(),
         root_node,
     }
 }
 
-enum FindingMoreNodes {
+pub(crate) enum FindingMoreNodes {
     Hit(Address),
     Branching(Vec<Candidate>),
     Nothing,
@@ -31,13 +29,9 @@ enum FindingMoreNodes {
 impl<'input> Iterator for AddressIterator<'input> {
     type Item = Address;
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(address) = self.found_addresses.pop_front() {
-            return Some(address);
-        }
-
         while let Some(path_to_explore) = self.candidates.pop_front() {
             match find_more_addresses(path_to_explore, self.root_node) {
-                FindingMoreNodes::Hit(address) => self.found_addresses.push_back(address),
+                FindingMoreNodes::Hit(address) => return Some(address),
                 FindingMoreNodes::Branching(more_candidates) => {
                     self.candidates.extend(more_candidates);
                 }
@@ -49,7 +43,7 @@ impl<'input> Iterator for AddressIterator<'input> {
     }
 }
 
-fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreNodes {
+pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreNodes {
     let current_address = path.starting_point;
     // Are we at the end of the query?
     let Some((next_step, remaining_query)) = path.remaining_query.take_step() else {
