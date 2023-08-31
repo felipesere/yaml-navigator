@@ -4,43 +4,30 @@ use serde_yaml::Value;
 
 use crate::{get, value_name, Address, Candidate, Query, Step};
 
-struct AddressIterator<'input> {
-    candidates: VecDeque<Candidate>,
-    // the addresses here have to be relative to the root
-    root_node: &'input Value,
-}
+fn matching_addresses(root_node: &Value, query: Query) -> Vec<Address> {
+    let mut candidates = VecDeque::from_iter([Candidate {
+        starting_point: Address::default(),
+        remaining_query: query,
+    }]);
+    let mut addresses = Vec::new();
 
-fn iter(root_node: &Value, query: Query) -> AddressIterator {
-    AddressIterator {
-        candidates: VecDeque::from_iter([Candidate {
-            starting_point: Address::default(),
-            remaining_query: query,
-        }]),
-        root_node,
+    while let Some(path_to_explore) = candidates.pop_front() {
+        match find_more_addresses(path_to_explore, root_node) {
+            FindingMoreNodes::Hit(address) => addresses.push(address),
+            FindingMoreNodes::Branching(more_candidates) => {
+                candidates.extend(more_candidates);
+            }
+            FindingMoreNodes::Nothing => {}
+        };
     }
+
+    addresses
 }
 
 pub(crate) enum FindingMoreNodes {
     Hit(Address),
     Branching(Vec<Candidate>),
     Nothing,
-}
-
-impl<'input> Iterator for AddressIterator<'input> {
-    type Item = Address;
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(path_to_explore) = self.candidates.pop_front() {
-            match find_more_addresses(path_to_explore, self.root_node) {
-                FindingMoreNodes::Hit(address) => return Some(address),
-                FindingMoreNodes::Branching(more_candidates) => {
-                    self.candidates.extend(more_candidates);
-                }
-                FindingMoreNodes::Nothing => {}
-            };
-        }
-
-        None
-    }
 }
 
 pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreNodes {
@@ -173,7 +160,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreN
                 value
             };
 
-            if iter(value_to_check, sub_query).next().is_none() {
+            if matching_addresses(value_to_check, sub_query).is_empty() {
                 return FindingMoreNodes::Nothing;
             }
             find_more_addresses(
@@ -188,7 +175,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreN
             let value = val;
             let all_match = sub_queries
                 .iter()
-                .all(|q| iter(value, q.clone()).next().is_some());
+                .all(|q| !matching_addresses(value, q.clone()).is_empty());
 
             if !all_match {
                 return FindingMoreNodes::Nothing;
@@ -205,7 +192,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreN
             let value = val;
             let any_match = sub_queries
                 .iter()
-                .any(|q| iter(value, q.clone()).next().is_some());
+                .any(|q| !matching_addresses(value, q.clone()).is_empty());
 
             if !any_match {
                 return FindingMoreNodes::Nothing;
@@ -221,7 +208,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindingMoreN
         (Step::Branch(sub_queries), value @ Value::Mapping(_)) => {
             let mut additional_paths = Vec::new();
             for sub_query in sub_queries {
-                for relative_address in iter(value, sub_query) {
+                for relative_address in matching_addresses(value, sub_query) {
                     additional_paths.push(Candidate {
                         starting_point: current_address.append(relative_address),
                         remaining_query: remaining_query.clone(),
