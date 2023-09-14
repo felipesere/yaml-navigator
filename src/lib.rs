@@ -281,6 +281,7 @@ impl<'input> Iterator for ManyMutResults<'input> {
             match find_more_addresses(path_to_explore, self.root_node) {
                 FindAddresses::Hit(address) => {
                     self.found_addresses.push_back(address);
+                    break;
                 }
                 FindAddresses::Branching(more_candidates) => {
                     self.candidates.extend(more_candidates);
