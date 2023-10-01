@@ -292,7 +292,11 @@ impl<'input> Iterator for ManyMutResults<'input> {
 
         while let Some(address) = self.found_addresses.pop_front() {
             if let Some(found_node) = get_mut(self.root_node, &address) {
-                // Highly suspicious code right tgere!
+                // SAFETY:
+                // I think this should be safe because:
+                // * ManyMutResults iter is given an exclusive reference to the underlying serde_yaml::Value
+                // * This is the only reference being handed out. Internally we keep track of possible `Address`
+                //   inside the YAML which then get checked before handing out a reference.
                 return unsafe { Some(&mut *(found_node as *mut Value)) };
             }
         }
