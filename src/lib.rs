@@ -235,15 +235,13 @@ impl<'input> Iterator for ManyResults<'input> {
 }
 
 fn get_mut<'a>(node: &'a mut Value, adr: &Address) -> Option<&'a mut Value> {
-    use LocationFragment::*;
-
     let mut current_node = Some(node);
     for fragment in &adr.0 {
         let actual_node = current_node?;
         match fragment {
-            Field(f) if f == "." => current_node = Some(actual_node),
-            Field(f) => current_node = actual_node.get_mut(f),
-            Index(i) => current_node = actual_node.get_mut(i),
+            LocationFragment::Field(f) if f == "." => current_node = Some(actual_node),
+            LocationFragment::Field(f) => current_node = actual_node.get_mut(f),
+            LocationFragment::Index(i) => current_node = actual_node.get_mut(i),
         }
     }
 
@@ -251,15 +249,13 @@ fn get_mut<'a>(node: &'a mut Value, adr: &Address) -> Option<&'a mut Value> {
 }
 
 fn get<'a>(node: &'a Value, adr: &Address) -> Option<&'a Value> {
-    use LocationFragment::*;
-
     let mut current_node = Some(node);
     for fragment in &adr.0 {
         let actual_node = current_node?;
         match fragment {
-            Field(f) if f == "." => current_node = Some(actual_node),
-            Field(f) => current_node = actual_node.get(f),
-            Index(i) => current_node = actual_node.get(i),
+            LocationFragment::Field(f) if f == "." => current_node = Some(actual_node),
+            LocationFragment::Field(f) => current_node = actual_node.get(f),
+            LocationFragment::Index(i) => current_node = actual_node.get(i),
         }
     }
 
