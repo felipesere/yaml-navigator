@@ -11,64 +11,71 @@ use crate::address::LocationFragment;
 
 mod address;
 
+#[macro_export]
 macro_rules! step {
     ("*") => {
-        Step::All
+        $crate::Step::All
     };
     ($a:expr) => {
-        Step::from($a)
+        $crate::Step::from($a)
     };
 }
 
+#[macro_export]
 macro_rules! query {
     ($($a:expr $(,)?)+) => {{
-        let mut the_query = Query::default();
+        let mut the_query = $crate::Query::default();
         $(
-            the_query.steps.push(step!($a));
+            the_query.steps.push($crate::step!($a));
         )+
         the_query
     }};
 }
 
+#[macro_export]
 macro_rules! r#where {
     ($field:literal => $body:expr) => {{
-        Step::filter($field, $body)
+        $crate::Step::filter($field, $body)
     }};
 }
 
+#[macro_export]
 macro_rules! sub {
     ($field:literal => $sub_query:expr) => {{
-        Step::sub_query($field, $sub_query)
+        $crate::Step::sub_query($field, $sub_query)
     }};
 }
 
+#[macro_export]
 macro_rules! and {
     ($($a:expr $(,)?)+) => {{
-        let mut arms: Vec<Query> = Vec::new();
+        let mut arms: Vec<$crate::Query> = Vec::new();
         $(
             arms.push($a);
         )+
-        Step::And(arms)
+        $crate::Step::And(arms)
     }};
 }
 
+#[macro_export]
 macro_rules! or {
     ($($a:expr $(,)?)+) => {{
-        let mut arms: Vec<Query> = Vec::new();
+        let mut arms: Vec<$crate::Query> = Vec::new();
         $(
             arms.push($a);
         )+
-        Step::Or(arms)
+        $crate::Step::Or(arms)
     }};
 }
 
+#[macro_export]
 macro_rules! branch {
     ($($a:expr $(,)?)+) => {{
-        let mut arms: Vec<Query> = Vec::new();
+        let mut arms: Vec<$crate::Query> = Vec::new();
         $(
             arms.push($a.into());
         )+
-        Step::Branch(arms)
+        $crate::Step::Branch(arms)
     }};
 }
 
