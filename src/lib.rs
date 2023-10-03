@@ -276,10 +276,12 @@ pub struct ManyMutResults<'input> {
     root_node: &'input mut Value,
 }
 
-impl<'input> Iterator for ManyMutResults<'input> {
-    type Item = &'input mut Value;
+impl<'input> gat_lending_iterator::LendingIterator for ManyMutResults<'input> {
+    type Item<'a> = &'a mut Value
+        where
+            Self: 'a;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<Self::Item<'_>> {
         while let Some(path_to_explore) = self.candidates.pop_front() {
             match find_more_addresses(path_to_explore, self.root_node) {
                 FindAddresses::Hit(address) => {
@@ -294,13 +296,10 @@ impl<'input> Iterator for ManyMutResults<'input> {
         }
 
         while let Some(address) = self.found_addresses.pop_front() {
-            if let Some(found_node) = get_mut(self.root_node, &address) {
-                // SAFETY:
-                // I think this should be safe because:
-                // * ManyMutResults iter is given an exclusive reference to the underlying serde_yaml::Value
-                // * This is the only reference being handed out. Internally we keep track of possible `Address`
-                //   inside the YAML which then get checked before handing out a reference.
-                return unsafe { Some(&mut *(found_node as *mut Value)) };
+            // SAFETY: see https://docs.rs/polonius-the-crab/0.3.1/polonius_the_crab/#the-arcanemagic
+            let self_ = unsafe { &mut *(self as *mut Self) };
+            if let Some(found_node) = get_mut(self_.root_node, &address) {
+                return Some(found_node);
             }
         }
         None
@@ -342,6 +341,7 @@ pub fn navigate_iter_mut(input: &mut Value, query: Query) -> ManyMutResults<'_> 
 
 #[cfg(test)]
 mod tests {
+    use gat_lending_iterator::LendingIterator;
     use std::assert_eq;
 
     use indoc::indoc;
@@ -692,8 +692,12 @@ mod tests {
             r#where!("name" => |name: String| name == "Felipe"),
         ];
 
-        for name in navigate_iter_mut(&mut yaml, felipes_name) {
-            *name = serde_yaml::Value::from("epileF");
+        {
+            let mut iter = navigate_iter_mut(&mut yaml, felipes_name);
+
+            while let Some(name) = iter.next() {
+                *name = serde_yaml::Value::from("epileF");
+            }
         }
 
         let modified = serde_yaml::to_string(&yaml).unwrap();
@@ -726,11 +730,13 @@ mod tests {
         let hobbies_and_sport = query!["people", "*", branch!["hobbies", "sports"], "*"];
 
         let all: Vec<_> = navigate_iter(&yaml, hobbies_and_sport.clone()).collect();
-
         assert_eq!(all.len(), 4);
 
-        for hobby_or_sport in navigate_iter_mut(&mut yaml, hobbies_and_sport) {
-            *hobby_or_sport = serde_yaml::Value::from("F1");
+        {
+            let mut iter = navigate_iter_mut(&mut yaml, hobbies_and_sport.clone());
+            while let Some(hobby_or_sport) = iter.next() {
+                *hobby_or_sport = serde_yaml::Value::from("F1");
+            }
         }
 
         let modified = serde_yaml::to_string(&yaml).unwrap();
