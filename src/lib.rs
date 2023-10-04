@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 
-use address::{find_more_addresses, Address, FindAddresses};
+use address::{find_more_addresses, Address};
 use serde::de::DeserializeOwned;
 use serde_yaml::Value;
 
@@ -97,6 +97,7 @@ impl Query {
 
 #[derive(Clone)]
 pub enum Step {
+    Recursive,
     Field(String),
     And(Vec<Query>),
     Or(Vec<Query>),
@@ -108,12 +109,18 @@ pub enum Step {
     Range(Range<usize>),
 }
 
+impl std::fmt::Display for Step {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self, f)
+    }
+}
+
 impl From<String> for Step {
     fn from(value: String) -> Self {
-        if value == "*" {
-            Step::All
-        } else {
-            Step::Field(value)
+        match value.as_str() {
+            "*" => Step::All,
+            "..." => Step::Recursive,
+            _ => Step::Field(value),
         }
     }
 }
@@ -148,6 +155,7 @@ impl From<Range<usize>> for Step {
 impl Step {
     fn name(&self) -> &'static str {
         match self {
+            Step::Recursive => "recursive",
             Step::Field(_) => "field",
             Step::And(_) => "and",
             Step::Or(_) => "or",
@@ -204,13 +212,26 @@ impl std::fmt::Debug for Step {
             Self::Range(r) => f.debug_tuple("Range").field(r).finish(),
             Self::Filter(arg0, _arg1) => f.debug_tuple("Filter").field(arg0).finish(),
             Self::SubQuery(arg, _arg2) => f.debug_tuple("SubQuery").field(arg).finish(),
+            Self::Recursive => write!(f, "Recursive"),
         }
     }
 }
 
-struct Candidate {
-    starting_point: Address,
-    remaining_query: Query,
+#[derive(Debug)]
+pub(crate) struct Candidate {
+    pub(crate) starting_point: Address,
+    pub(crate) remaining_query: Query,
+    pub(crate) search_kind: SearchKind,
+}
+
+/// The kind of search process we are in
+#[derive(Debug, Default, Clone)]
+pub(crate) enum SearchKind {
+    /// Just searching from the root of the tree downwards
+    #[default]
+    Normal,
+    /// A recursive search where the `Query` can match from any point downwards
+    Recursive(Query),
 }
 
 pub struct ManyResults<'input> {
@@ -223,17 +244,21 @@ impl<'input> Iterator for ManyResults<'input> {
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(path_to_explore) = self.candidates.pop_front() {
-            match find_more_addresses(path_to_explore, self.root_node) {
-                FindAddresses::Hit(address) => {
-                    let node = get(self.root_node, &address);
-                    if node.is_some() {
-                        return node;
-                    }
+            tracing::info!(
+                "Next candidate to explore: '{}' with query: '{:?}'",
+                path_to_explore.starting_point,
+                path_to_explore.remaining_query,
+            );
+            let found = find_more_addresses(path_to_explore, self.root_node);
+            tracing::info!("Found something...");
+            self.candidates.extend(found.branching);
+
+            if let Some(address) = found.hit {
+                tracing::info!("We got a hit: {address}");
+                let node = get(self.root_node, &address);
+                if node.is_some() {
+                    return node;
                 }
-                FindAddresses::Branching(more_candidates) => {
-                    self.candidates.extend(more_candidates);
-                }
-                FindAddresses::Nothing => {}
             };
         }
 
@@ -283,16 +308,14 @@ impl<'input> gat_lending_iterator::LendingIterator for ManyMutResults<'input> {
 
     fn next(&mut self) -> Option<Self::Item<'_>> {
         while let Some(path_to_explore) = self.candidates.pop_front() {
-            match find_more_addresses(path_to_explore, self.root_node) {
-                FindAddresses::Hit(address) => {
-                    self.found_addresses.push_back(address);
-                    break;
-                }
-                FindAddresses::Branching(more_candidates) => {
-                    self.candidates.extend(more_candidates);
-                }
-                FindAddresses::Nothing => {}
-            };
+            tracing::info!("Looking at {}", path_to_explore.starting_point);
+            let found = find_more_addresses(path_to_explore, self.root_node);
+            self.candidates.extend(found.branching);
+
+            if let Some(address) = found.hit {
+                tracing::info!("We got a hit: {address}");
+                self.found_addresses.push_back(address);
+            }
         }
 
         while let Some(address) = self.found_addresses.pop_front() {
@@ -324,6 +347,7 @@ pub fn navigate_iter(root_node: &Value, query: Query) -> ManyResults<'_> {
         candidates: VecDeque::from([Candidate {
             starting_point: Address::default(),
             remaining_query: query,
+            search_kind: SearchKind::Normal,
         }]),
     }
 }
@@ -334,6 +358,7 @@ pub fn navigate_iter_mut(input: &mut Value, query: Query) -> ManyMutResults<'_> 
         candidates: VecDeque::from_iter([Candidate {
             starting_point: Address::default(),
             remaining_query: query,
+            search_kind: SearchKind::Normal,
         }]),
         found_addresses: VecDeque::default(),
     }
@@ -343,6 +368,7 @@ pub fn navigate_iter_mut(input: &mut Value, query: Query) -> ManyMutResults<'_> 
 mod tests {
     use gat_lending_iterator::LendingIterator;
     use std::assert_eq;
+    use tracing_test::traced_test;
 
     use indoc::indoc;
 
@@ -765,5 +791,40 @@ mod tests {
               - F1
         "#]]
         .assert_eq(&modified);
+    }
+
+    #[test]
+    #[traced_test]
+    fn recursive_search() {
+        let yaml: serde_yaml::Value = serde_yaml::from_str(indoc! {r#"
+            kind: Foo
+            apiVersion: v1
+            metadata:
+              labels:
+                alpha: 1
+              annotations:
+                bravo: 2
+            spec:
+              template:
+                metadata:
+                  labels:
+                    charlie: 3
+                  annotations:
+                    delta: 4
+                foo:
+                  bar:
+                    labels:
+                      echo: 5
+                    annotations: 
+                      foxtrott: 6
+                   
+            "#})
+        .unwrap();
+
+        let annotations_everywhere = query!["...", "annotations"];
+
+        let all: Vec<_> = navigate_iter(&yaml, annotations_everywhere).collect();
+
+        assert_eq!(3, all.len());
     }
 }
