@@ -1,4 +1,3 @@
-#![allow(unused_macros)]
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
@@ -796,7 +795,7 @@ mod tests {
     #[test]
     #[traced_test]
     fn recursive_search() {
-        let yaml: serde_yaml::Value = serde_yaml::from_str(indoc! {r#"
+        let mut yaml: serde_yaml::Value = serde_yaml::from_str(indoc! {r#"
             kind: Foo
             apiVersion: v1
             metadata:
@@ -817,14 +816,51 @@ mod tests {
                       echo: 5
                     annotations: 
                       foxtrott: 6
-                   
             "#})
         .unwrap();
 
         let annotations_everywhere = query!["...", "annotations"];
 
-        let all: Vec<_> = navigate_iter(&yaml, annotations_everywhere).collect();
-
+        let all: Vec<_> = navigate_iter(&yaml, annotations_everywhere.clone()).collect();
         assert_eq!(3, all.len());
+
+        {
+            let mut iter = navigate_iter_mut(&mut yaml, annotations_everywhere);
+            while let Some(annotations) = iter.next() {
+                if let Some(m) = annotations.as_mapping_mut() {
+                    m.insert("new".into(), 100.into());
+                };
+            }
+        }
+
+        expect_test::expect![[r#"
+            kind: Foo
+            apiVersion: v1
+            metadata:
+              labels:
+                alpha: 1
+              annotations:
+                bravo: 2
+                new: 100
+            spec:
+              template:
+                metadata:
+                  labels:
+                    charlie: 3
+                  annotations:
+                    delta: 4
+                    new: 100
+                foo:
+                  bar:
+                    labels:
+                      echo: 5
+                    annotations:
+                      foxtrott: 6
+                      new: 100
+        "#]]
+        .assert_eq(&serde_yaml::to_string(&yaml).unwrap());
+
+        let labels: Vec<_> = navigate_iter(&yaml, query!["spec", "...", "labels"]).collect();
+        assert_eq!(2, labels.len());
     }
 }
