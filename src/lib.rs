@@ -9,6 +9,7 @@ use serde_yaml::Value;
 use crate::address::LocationFragment;
 
 mod address;
+pub use gat_lending_iterator::LendingIterator;
 
 #[macro_export]
 macro_rules! step {
