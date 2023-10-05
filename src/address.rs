@@ -121,12 +121,12 @@ impl FindAddresses {
 
 pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindAddresses {
     let current_address = path.starting_point;
-    tracing::info!("Looking at {current_address}");
+    tracing::debug!("Looking at {current_address}");
     // Are we at the end of the query?
     let Some((next_step, remaining_query)) = path.remaining_query.take_step() else {
         return FindAddresses::hit(current_address);
     };
-    tracing::info!("The next step to take is {next_step}");
+    tracing::debug!("The next step to take is {next_step}");
 
     // if not, can we get the node for the current address?
     let Some(node) = get(root, &current_address) else {
@@ -141,7 +141,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindAddresse
         if let Some(m) = node.as_mapping() {
             for (key, _) in m {
                 let field = key.as_str().unwrap().to_string();
-                tracing::info!("Adding a candidate for \"{field}\" in mapping for recursion from {current_address}");
+                tracing::debug!("Adding a candidate for \"{field}\" in mapping for recursion from {current_address}");
                 additional_paths.push(Candidate {
                     starting_point: current_address.extend(field),
                     remaining_query: recursive_query.clone(),
@@ -151,7 +151,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindAddresse
         }
         if let Some(s) = node.as_sequence() {
             for idx in 0..s.len() {
-                tracing::info!(
+                tracing::debug!(
                     "Adding a candidate for \"{idx}\" in sequence for recursion from {current_address}"
                 );
                 additional_paths.push(Candidate {
@@ -163,7 +163,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindAddresse
         }
     }
 
-    tracing::info!("Checking pairing between {next_step} and {node:?}");
+    tracing::debug!("Checking pairing between {next_step} and {node:?}");
     let mut next = 'match_block: {
         match (next_step, node) {
             (Step::Field(f), Value::Mapping(m)) => {
@@ -364,14 +364,14 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindAddresse
             (step, value) => {
                 let step = step.name();
                 let value = value_name(value);
-                tracing::warn!("'{step}' not supported for '{value}'",);
+                tracing::debug!("'{step}' not supported for '{value}'",);
 
                 FindAddresses::nothing()
             }
         }
     };
 
-    tracing::info!("This is the outcome of running the step: {next:?}");
+    tracing::debug!("This is the outcome of running the step: {next:?}");
 
     next.branching.extend(additional_paths);
     next
