@@ -1,59 +1,81 @@
-#![allow(unused_macros)]
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 
+use address::{find_more_addresses, Address};
 use serde::de::DeserializeOwned;
 use serde_yaml::Value;
 
+use crate::address::LocationFragment;
+
+mod address;
+pub use gat_lending_iterator::LendingIterator;
+
+#[macro_export]
 macro_rules! step {
     ("*") => {
-        Step::All
+        $crate::Step::All
     };
     ($a:expr) => {
-        Step::from($a)
+        $crate::Step::from($a)
     };
 }
 
+#[macro_export]
 macro_rules! query {
     ($($a:expr $(,)?)+) => {{
-        let mut the_query = Query::default();
+        let mut the_query = $crate::Query::default();
         $(
-            the_query.steps.push(step!($a));
+            the_query.steps.push($crate::step!($a));
         )+
         the_query
     }};
 }
 
+#[macro_export]
 macro_rules! r#where {
     ($field:literal => $body:expr) => {{
-        Step::filter($field, $body)
+        $crate::Step::filter($field, $body)
     }};
 }
 
+#[macro_export]
 macro_rules! sub {
     ($field:literal => $sub_query:expr) => {{
-        Step::sub_query($field, $sub_query)
+        $crate::Step::sub_query($field, $sub_query)
     }};
 }
 
+#[macro_export]
 macro_rules! and {
     ($($a:expr $(,)?)+) => {{
-        let mut arms: Vec<Query> = Vec::new();
+        let mut arms: Vec<$crate::Query> = Vec::new();
         $(
             arms.push($a);
         )+
-        Step::And(arms)
+        $crate::Step::And(arms)
     }};
 }
 
+#[macro_export]
 macro_rules! or {
     ($($a:expr $(,)?)+) => {{
-        let mut arms: Vec<Query> = Vec::new();
+        let mut arms: Vec<$crate::Query> = Vec::new();
         $(
             arms.push($a);
         )+
-        Step::Or(arms)
+        $crate::Step::Or(arms)
+    }};
+}
+
+#[macro_export]
+macro_rules! branch {
+    ($($a:expr $(,)?)+) => {{
+        let mut arms: Vec<$crate::Query> = Vec::new();
+        $(
+            arms.push($a.into());
+        )+
+        $crate::Step::Branch(arms)
     }};
 }
 
@@ -75,9 +97,11 @@ impl Query {
 
 #[derive(Clone)]
 pub enum Step {
+    Recursive,
     Field(String),
     And(Vec<Query>),
     Or(Vec<Query>),
+    Branch(Vec<Query>),
     At(usize),
     All,
     Filter(String, Arc<dyn Fn(&serde_yaml::Value) -> bool>),
@@ -85,12 +109,18 @@ pub enum Step {
     Range(Range<usize>),
 }
 
+impl std::fmt::Display for Step {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self, f)
+    }
+}
+
 impl From<String> for Step {
     fn from(value: String) -> Self {
-        if value == "*" {
-            Step::All
-        } else {
-            Step::Field(value)
+        match value.as_str() {
+            "*" => Step::All,
+            "..." => Step::Recursive,
+            _ => Step::Field(value),
         }
     }
 }
@@ -99,6 +129,14 @@ impl From<&str> for Step {
     fn from(value: &str) -> Self {
         let val = value.to_string();
         Step::from(val)
+    }
+}
+
+impl From<&str> for Query {
+    fn from(value: &str) -> Self {
+        Query {
+            steps: vec![value.into()],
+        }
     }
 }
 
@@ -117,9 +155,11 @@ impl From<Range<usize>> for Step {
 impl Step {
     fn name(&self) -> &'static str {
         match self {
+            Step::Recursive => "recursive",
             Step::Field(_) => "field",
             Step::And(_) => "and",
             Step::Or(_) => "or",
+            Step::Branch(_) => "branch",
             Step::At(_) => "at",
             Step::Range(_) => "range",
             Step::All => "all",
@@ -165,389 +205,127 @@ impl std::fmt::Debug for Step {
         match self {
             Self::Field(arg0) => f.debug_tuple("Field").field(arg0).finish(),
             Self::And(arg0) => f.debug_tuple("And").field(arg0).finish(),
+            Self::Branch(arg0) => f.debug_tuple("Branch").field(arg0).finish(),
             Self::Or(arg0) => f.debug_tuple("Or").field(arg0).finish(),
             Self::At(arg0) => f.debug_tuple("Index").field(arg0).finish(),
             Self::All => write!(f, "All"),
             Self::Range(r) => f.debug_tuple("Range").field(r).finish(),
             Self::Filter(arg0, _arg1) => f.debug_tuple("Filter").field(arg0).finish(),
             Self::SubQuery(arg, _arg2) => f.debug_tuple("SubQuery").field(arg).finish(),
+            Self::Recursive => write!(f, "Recursive"),
         }
     }
 }
 
-struct Paths<'input> {
-    starting_point: &'input Value,
-    query: Query,
+#[derive(Debug)]
+pub(crate) struct Candidate {
+    pub(crate) starting_point: Address,
+    pub(crate) remaining_query: Query,
+    pub(crate) search_kind: SearchKind,
 }
 
-struct MutPaths<'input> {
-    starting_point: &'input mut Value,
-    query: Query,
+/// The kind of search process we are in
+#[derive(Debug, Default, Clone)]
+pub(crate) enum SearchKind {
+    /// Just searching from the root of the tree downwards
+    #[default]
+    Normal,
+    /// A recursive search where the `Query` can match from any point downwards
+    Recursive(Query),
 }
 
 pub struct ManyResults<'input> {
-    paths_to_explore: VecDeque<Paths<'input>>,
+    candidates: VecDeque<Candidate>,
+    root_node: &'input Value,
 }
 
 impl<'input> Iterator for ManyResults<'input> {
     type Item = &'input Value;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(path_to_explore) = self.paths_to_explore.pop_front() {
-            match dive(path_to_explore) {
-                DiveOutcome::Final(value) => return Some(value),
-                DiveOutcome::Branch(more_paths_to_consider) => {
-                    self.paths_to_explore.extend(more_paths_to_consider);
+        while let Some(path_to_explore) = self.candidates.pop_front() {
+            tracing::debug!(
+                "Next candidate to explore: '{}' with query: '{:?}'",
+                path_to_explore.starting_point,
+                path_to_explore.remaining_query,
+            );
+            let found = find_more_addresses(path_to_explore, self.root_node);
+            tracing::debug!("Found something...");
+            self.candidates.extend(found.branching);
+
+            if let Some(address) = found.hit {
+                tracing::debug!("We got a hit: {address}");
+                let node = get(self.root_node, &address);
+                if node.is_some() {
+                    return node;
                 }
-                DiveOutcome::Nothing | DiveOutcome::FinalMut(_) => {}
             };
         }
+
         None
     }
+}
+
+fn get_mut<'a>(node: &'a mut Value, adr: &Address) -> Option<&'a mut Value> {
+    let mut current_node = Some(node);
+    for fragment in &adr.0 {
+        let actual_node = current_node?;
+        match fragment {
+            LocationFragment::Field(f) if f == "." => current_node = Some(actual_node),
+            LocationFragment::Field(f) => current_node = actual_node.get_mut(f),
+            LocationFragment::Index(i) => current_node = actual_node.get_mut(i),
+        }
+    }
+
+    current_node
+}
+
+fn get<'a>(node: &'a Value, adr: &Address) -> Option<&'a Value> {
+    let mut current_node = Some(node);
+    for fragment in &adr.0 {
+        let actual_node = current_node?;
+        match fragment {
+            LocationFragment::Field(f) if f == "." => current_node = Some(actual_node),
+            LocationFragment::Field(f) => current_node = actual_node.get(f),
+            LocationFragment::Index(i) => current_node = actual_node.get(i),
+        }
+    }
+
+    current_node
 }
 
 pub struct ManyMutResults<'input> {
-    paths_to_explore: VecDeque<MutPaths<'input>>,
+    candidates: VecDeque<Candidate>,
+    // the addresses here have to be relative to the root
+    found_addresses: VecDeque<Address>,
+    root_node: &'input mut Value,
 }
 
-impl<'input> Iterator for ManyMutResults<'input> {
-    type Item = &'input mut Value;
+impl<'input> gat_lending_iterator::LendingIterator for ManyMutResults<'input> {
+    type Item<'a> = &'a mut Value
+        where
+            Self: 'a;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(path_to_explore) = self.paths_to_explore.pop_front() {
-            match dive_mut(path_to_explore) {
-                DiveOutcome::FinalMut(value) => return Some(value),
-                DiveOutcome::Branch(more_paths_to_consider) => {
-                    self.paths_to_explore.extend(more_paths_to_consider);
-                }
-                DiveOutcome::Nothing | DiveOutcome::Final(_) => {}
-            };
+    fn next(&mut self) -> Option<Self::Item<'_>> {
+        while let Some(path_to_explore) = self.candidates.pop_front() {
+            tracing::debug!("Looking at {}", path_to_explore.starting_point);
+            let found = find_more_addresses(path_to_explore, self.root_node);
+            self.candidates.extend(found.branching);
+
+            if let Some(address) = found.hit {
+                tracing::debug!("We got a hit: {address}");
+                self.found_addresses.push_back(address);
+            }
+        }
+
+        while let Some(address) = self.found_addresses.pop_front() {
+            // SAFETY: see https://docs.rs/polonius-the-crab/0.3.1/polonius_the_crab/#the-arcanemagic
+            let self_ = unsafe { &mut *(self as *mut Self) };
+            if let Some(found_node) = get_mut(self_.root_node, &address) {
+                return Some(found_node);
+            }
         }
         None
-    }
-}
-
-enum DiveOutcome<'input, P> {
-    Nothing,
-    Final(&'input Value),
-    FinalMut(&'input mut Value),
-    Branch(Vec<P>),
-}
-fn dive_mut(path: MutPaths<'_>) -> DiveOutcome<'_, MutPaths<'_>> {
-    let Some((next_step, remaining_query)) = path.query.take_step() else {
-        return DiveOutcome::FinalMut(path.starting_point);
-    };
-
-    tracing::info!("Matching {next_step:?} against {:?}", path.starting_point);
-    match (next_step, path.starting_point) {
-        (Step::Field(f), Value::Mapping(m)) => {
-            let accessor = Value::String(f);
-            let Some(next_value) = m.get_mut(accessor) else {
-                return DiveOutcome::Nothing;
-            };
-            dive_mut(MutPaths {
-                starting_point: next_value,
-                query: remaining_query,
-            })
-        }
-        (Step::At(idx), Value::Sequence(s)) => {
-            let Some(next_value) = s.get_mut(idx) else {
-                return DiveOutcome::Nothing;
-            };
-            dive_mut(MutPaths {
-                starting_point: next_value,
-                query: remaining_query,
-            })
-        }
-        (Step::Range(r), Value::Sequence(sequence)) => {
-            let mut additional_paths = Vec::new();
-            for point in &mut sequence[r] {
-                additional_paths.push(MutPaths {
-                    starting_point: point,
-                    query: remaining_query.clone(),
-                });
-            }
-            DiveOutcome::Branch(additional_paths)
-        }
-        (Step::All, Value::Sequence(sequence)) => {
-            let mut additional_paths = Vec::new();
-            for point in sequence {
-                additional_paths.push(MutPaths {
-                    starting_point: point,
-                    query: remaining_query.clone(),
-                });
-            }
-            DiveOutcome::Branch(additional_paths)
-        }
-        (Step::Filter(field, predicate), s @ Value::String(_)) => {
-            if field != "." {
-                return DiveOutcome::Nothing;
-            }
-
-            if !predicate(s) {
-                return DiveOutcome::Nothing;
-            }
-
-            dive_mut(MutPaths {
-                starting_point: s,
-                query: remaining_query,
-            })
-        }
-        (Step::Filter(field, predicate), Value::Sequence(sequence)) => {
-            let mut additional_paths = Vec::new();
-            for val in sequence {
-                let value_to_check = if field == "." {
-                    val
-                } else {
-                    let Some(value) = val.get_mut(&field) else {
-                        return DiveOutcome::Nothing;
-                    };
-                    value
-                };
-
-                if !predicate(value_to_check) {
-                    continue;
-                }
-
-                additional_paths.push(MutPaths {
-                    starting_point: value_to_check,
-                    query: remaining_query.clone(),
-                })
-            }
-
-            DiveOutcome::Branch(additional_paths)
-        }
-        (Step::Filter(field, predicate), val @ Value::Mapping(_)) => {
-            let value_to_check = if field == "." {
-                val
-            } else {
-                let Some(value) = val.as_mapping_mut().unwrap().get_mut(field) else {
-                    return DiveOutcome::Nothing;
-                };
-                value
-            };
-
-            if !predicate(value_to_check) {
-                return DiveOutcome::Nothing;
-            }
-
-            dive_mut(MutPaths {
-                starting_point: value_to_check,
-                query: remaining_query,
-            })
-        }
-        (Step::SubQuery(field, sub_query), val @ Value::Mapping(_)) => {
-            let value_to_check = if field == "." {
-                val
-            } else {
-                let Some(value) = val.as_mapping_mut().unwrap().get_mut(field) else {
-                    return DiveOutcome::Nothing;
-                };
-                value
-            };
-
-            if navigate_iter(value_to_check, sub_query).next().is_none() {
-                return DiveOutcome::Nothing;
-            }
-            dive_mut(MutPaths {
-                starting_point: value_to_check,
-                query: remaining_query,
-            })
-        }
-        (Step::And(sub_queries), val @ Value::Mapping(_)) => {
-            let value = val;
-            let all_match = sub_queries
-                .iter()
-                .all(|q| navigate_iter(value, q.clone()).next().is_some());
-
-            if !all_match {
-                return DiveOutcome::Nothing;
-            }
-            dive_mut(MutPaths {
-                starting_point: value,
-                query: remaining_query,
-            })
-        }
-        (Step::Or(sub_queries), val @ Value::Mapping(_)) => {
-            let value = val;
-            let any_match = sub_queries
-                .iter()
-                .any(|q| navigate_iter(value, q.clone()).next().is_some());
-
-            if !any_match {
-                return DiveOutcome::Nothing;
-            }
-            dive_mut(MutPaths {
-                starting_point: value,
-                query: remaining_query,
-            })
-        }
-        (step, value) => {
-            let step = step.name();
-            let value = value_name(value);
-            tracing::warn!("'{step}' not supported for '{value}'",);
-
-            DiveOutcome::Nothing
-        }
-    }
-}
-
-fn dive(path: Paths<'_>) -> DiveOutcome<'_, Paths> {
-    let Some((next_step, remaining_query)) = path.query.take_step() else {
-        return DiveOutcome::Final(path.starting_point);
-    };
-
-    tracing::info!("Matching {next_step:?} against {:?}", path.starting_point);
-    match (next_step, path.starting_point) {
-        (Step::Field(f), Value::Mapping(m)) => {
-            let accessor = Value::String(f);
-            let Some(next_value) = m.get(accessor) else {
-                return DiveOutcome::Nothing;
-            };
-            dive(Paths {
-                starting_point: next_value,
-                query: remaining_query,
-            })
-        }
-        (Step::At(idx), Value::Sequence(s)) => {
-            let Some(next_value) = s.get(idx) else {
-                return DiveOutcome::Nothing;
-            };
-            dive(Paths {
-                starting_point: next_value,
-                query: remaining_query,
-            })
-        }
-        (Step::Range(r), Value::Sequence(sequence)) => {
-            let mut additional_paths = Vec::new();
-            for point in &sequence[r] {
-                additional_paths.push(Paths {
-                    starting_point: point,
-                    query: remaining_query.clone(),
-                });
-            }
-            DiveOutcome::Branch(additional_paths)
-        }
-        (Step::All, Value::Sequence(sequence)) => {
-            let mut additional_paths = Vec::new();
-            for point in sequence {
-                additional_paths.push(Paths {
-                    starting_point: point,
-                    query: remaining_query.clone(),
-                });
-            }
-            DiveOutcome::Branch(additional_paths)
-        }
-        (Step::Filter(field, predicate), s @ Value::String(_)) => {
-            if field != "." {
-                return DiveOutcome::Nothing;
-            }
-
-            if !predicate(s) {
-                return DiveOutcome::Nothing;
-            }
-
-            dive(Paths {
-                starting_point: path.starting_point,
-                query: remaining_query,
-            })
-        }
-        (Step::Filter(field, predicate), Value::Sequence(sequence)) => {
-            let mut additional_paths = Vec::new();
-            for val in sequence {
-                let value_to_check = if field == "." {
-                    val
-                } else {
-                    let Some(value) = val.get(&field) else {
-                        return DiveOutcome::Nothing;
-                    };
-                    value
-                };
-
-                if !predicate(value_to_check) {
-                    continue;
-                }
-
-                additional_paths.push(Paths {
-                    starting_point: val,
-                    query: remaining_query.clone(),
-                })
-            }
-
-            DiveOutcome::Branch(additional_paths)
-        }
-        (Step::Filter(field, predicate), Value::Mapping(m)) => {
-            let value_to_check = if field == "." {
-                path.starting_point
-            } else {
-                let Some(value) = m.get(field) else {
-                    return DiveOutcome::Nothing;
-                };
-                value
-            };
-
-            if !predicate(value_to_check) {
-                return DiveOutcome::Nothing;
-            }
-
-            dive(Paths {
-                starting_point: path.starting_point,
-                query: remaining_query,
-            })
-        }
-        (Step::SubQuery(field, sub_query), Value::Mapping(m)) => {
-            let value_to_check = if field == "." {
-                path.starting_point
-            } else {
-                let Some(value) = m.get(field) else {
-                    return DiveOutcome::Nothing;
-                };
-                value
-            };
-
-            if navigate_iter(value_to_check, sub_query).next().is_none() {
-                return DiveOutcome::Nothing;
-            }
-            dive(Paths {
-                starting_point: path.starting_point,
-                query: remaining_query,
-            })
-        }
-        (Step::And(sub_queries), Value::Mapping(_m)) => {
-            let value = path.starting_point;
-            let all_match = sub_queries
-                .iter()
-                .all(|q| navigate_iter(value, q.clone()).next().is_some());
-
-            if !all_match {
-                return DiveOutcome::Nothing;
-            }
-            dive(Paths {
-                starting_point: path.starting_point,
-                query: remaining_query,
-            })
-        }
-        (Step::Or(sub_queries), Value::Mapping(_m)) => {
-            let value = path.starting_point;
-            let any_match = sub_queries
-                .iter()
-                .any(|q| navigate_iter(value, q.clone()).next().is_some());
-
-            if !any_match {
-                return DiveOutcome::Nothing;
-            }
-            dive(Paths {
-                starting_point: path.starting_point,
-                query: remaining_query,
-            })
-        }
-        (step, value) => {
-            let step = step.name();
-            let value = value_name(value);
-            tracing::warn!("'{step}' not supported for '{value}'",);
-
-            DiveOutcome::Nothing
-        }
     }
 }
 
@@ -563,27 +341,34 @@ fn value_name(value: &Value) -> &'static str {
     }
 }
 
-pub fn navigate_iter(input: &Value, query: Query) -> ManyResults<'_> {
+pub fn navigate_iter(root_node: &Value, query: Query) -> ManyResults<'_> {
     ManyResults {
-        paths_to_explore: VecDeque::from([Paths {
-            starting_point: input,
-            query,
+        root_node,
+        candidates: VecDeque::from([Candidate {
+            starting_point: Address::default(),
+            remaining_query: query,
+            search_kind: SearchKind::Normal,
         }]),
     }
 }
 
 pub fn navigate_iter_mut(input: &mut Value, query: Query) -> ManyMutResults<'_> {
     ManyMutResults {
-        paths_to_explore: VecDeque::from([MutPaths {
-            starting_point: input,
-            query,
+        root_node: input,
+        candidates: VecDeque::from_iter([Candidate {
+            starting_point: Address::default(),
+            remaining_query: query,
+            search_kind: SearchKind::Normal,
         }]),
+        found_addresses: VecDeque::default(),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use gat_lending_iterator::LendingIterator;
     use std::assert_eq;
+    use tracing_test::traced_test;
 
     use indoc::indoc;
 
@@ -765,26 +550,26 @@ mod tests {
     fn sub_query_for_filter() {
         let raw = indoc! {r#"
             people:
-                - name: Felipe
-                  surname: Sere
-                  age: 32
-                  address:
-                    street: Foo
-                    postcode: 12345
-                    city: Legoland
-                  hobbies:
-                    - tennis
-                    - computer
-                - name: Charlotte
-                  surname: Fereday
-                  age: 31
-                  address:
-                    street: Bar
-                    postcode: 12345
-                    city: Legoland
-                  sports:
-                   - swimming
-                   - yoga
+            - name: Felipe
+              surname: Sere
+              age: 32
+              address:
+                street: Foo
+                postcode: 12345
+                city: Legoland
+              hobbies:
+                - tennis
+                - computer
+            - name: Charlotte
+              surname: Fereday
+              age: 31
+              address:
+                street: Bar
+                postcode: 12345
+                city: Legoland
+              sports:
+               - swimming
+               - yoga
             "#};
         let yaml: Value = serde_yaml::from_str(raw).unwrap();
 
@@ -933,8 +718,12 @@ mod tests {
             r#where!("name" => |name: String| name == "Felipe"),
         ];
 
-        for name in navigate_iter_mut(&mut yaml, felipes_name) {
-            *name = serde_yaml::Value::from("epileF");
+        {
+            let mut iter = navigate_iter_mut(&mut yaml, felipes_name);
+
+            while let Some(name) = iter.next() {
+                *name = serde_yaml::Value::from("epileF");
+            }
         }
 
         let modified = serde_yaml::to_string(&yaml).unwrap();
@@ -963,5 +752,116 @@ mod tests {
               - yoga
         "#]]
         .assert_eq(&modified);
+
+        let hobbies_and_sport = query!["people", "*", branch!["hobbies", "sports"], "*"];
+
+        let all: Vec<_> = navigate_iter(&yaml, hobbies_and_sport.clone()).collect();
+        assert_eq!(all.len(), 4);
+
+        {
+            let mut iter = navigate_iter_mut(&mut yaml, hobbies_and_sport.clone());
+            while let Some(hobby_or_sport) = iter.next() {
+                *hobby_or_sport = serde_yaml::Value::from("F1");
+            }
+        }
+
+        let modified = serde_yaml::to_string(&yaml).unwrap();
+
+        expect_test::expect![[r#"
+            people:
+            - name: epileF
+              surname: Sere
+              age: 32
+              address:
+                street: Foo
+                postcode: 12345
+                city: Legoland
+              hobbies:
+              - F1
+              - F1
+            - name: Charlotte
+              surname: Fereday
+              age: 31
+              address:
+                street: Bar
+                postcode: 12345
+                city: Legoland
+              sports:
+              - F1
+              - F1
+        "#]]
+        .assert_eq(&modified);
+    }
+
+    #[test]
+    #[traced_test]
+    fn recursive_search() {
+        let mut yaml: serde_yaml::Value = serde_yaml::from_str(indoc! {r#"
+            kind: Foo
+            apiVersion: v1
+            metadata:
+              labels:
+                alpha: 1
+              annotations:
+                bravo: 2
+            spec:
+              template:
+                metadata:
+                  labels:
+                    charlie: 3
+                  annotations:
+                    delta: 4
+                foo:
+                  bar:
+                    labels:
+                      echo: 5
+                    annotations: 
+                      foxtrott: 6
+            "#})
+        .unwrap();
+
+        let annotations_everywhere = query!["...", "annotations"];
+
+        let all: Vec<_> = navigate_iter(&yaml, annotations_everywhere.clone()).collect();
+        assert_eq!(3, all.len());
+
+        {
+            let mut iter = navigate_iter_mut(&mut yaml, annotations_everywhere);
+            while let Some(annotations) = iter.next() {
+                if let Some(m) = annotations.as_mapping_mut() {
+                    m.insert("new".into(), 100.into());
+                };
+            }
+        }
+
+        expect_test::expect![[r#"
+            kind: Foo
+            apiVersion: v1
+            metadata:
+              labels:
+                alpha: 1
+              annotations:
+                bravo: 2
+                new: 100
+            spec:
+              template:
+                metadata:
+                  labels:
+                    charlie: 3
+                  annotations:
+                    delta: 4
+                    new: 100
+                foo:
+                  bar:
+                    labels:
+                      echo: 5
+                    annotations:
+                      foxtrott: 6
+                      new: 100
+        "#]]
+        .assert_eq(&serde_yaml::to_string(&yaml).unwrap());
+
+        let labels: Vec<_> = navigate_iter(&yaml, query!["spec", "...", "labels"]).collect();
+        assert_eq!(2, labels.len());
     }
 }
