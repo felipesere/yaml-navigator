@@ -13,12 +13,12 @@ license = "MIT"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-gat-lending-iterator = "0.1.1"
+gat-lending-iterator = "0.1"
 serde = "1"
-serde_yaml = "0.9.25"
-tracing = "0.1.37"
+serde_yaml = "0.9"
+tracing = "0.1"
 
 [dev-dependencies]
-indoc = "2.0.3"
-tracing-test = "0.2.4"
-expect-test = "*"
+indoc = "2"
+tracing-test = "0.2"
+expect-test = "1"
