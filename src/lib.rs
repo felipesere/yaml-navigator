@@ -85,6 +85,16 @@ pub struct Query {
 }
 
 impl Query {
+    pub fn refine<Q: Into<Query>>(&self, other: Q) -> Query {
+        let mut other_steps = other.into().steps;
+        let mut this = self.clone();
+        this.steps.append(&mut other_steps);
+
+        this
+    }
+}
+
+impl Query {
     fn take_step(&self) -> Option<(Step, Query)> {
         if self.steps.is_empty() {
             return None;
@@ -132,8 +142,8 @@ impl From<&str> for Step {
     }
 }
 
-impl From<&str> for Query {
-    fn from(value: &str) -> Self {
+impl<S: Into<Step>> From<S> for Query {
+    fn from(value: S) -> Self {
         Query {
             steps: vec![value.into()],
         }
@@ -824,6 +834,10 @@ mod tests {
 
         let all: Vec<_> = navigate_iter(&yaml, annotations_everywhere.clone()).collect();
         assert_eq!(3, all.len());
+
+        let only_foxtrott = annotations_everywhere.refine("foxtrott");
+        let all: Vec<_> = navigate_iter(&yaml, only_foxtrott).collect();
+        assert_eq!(1, all.len());
 
         {
             let mut iter = navigate_iter_mut(&mut yaml, annotations_everywhere);
