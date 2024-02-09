@@ -244,17 +244,17 @@ impl<'input> Iterator for ManyResults<'input> {
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(path_to_explore) = self.candidates.pop_front() {
-            tracing::debug!(
+            tracing::trace!(
                 "Next candidate to explore: '{}' with query: '{:?}'",
                 path_to_explore.starting_point,
                 path_to_explore.remaining_query,
             );
             let found = find_more_addresses(path_to_explore, self.root_node);
-            tracing::debug!("Found something...");
+            tracing::trace!("Found something...");
             self.candidates.extend(found.branching);
 
             if let Some(address) = found.hit {
-                tracing::debug!("We got a hit: {address}");
+                tracing::trace!("We got a hit: {address}");
                 let node = get(self.root_node, &address);
                 if node.is_some() {
                     return node;
@@ -308,12 +308,12 @@ impl<'input> gat_lending_iterator::LendingIterator for ManyMutResults<'input> {
 
     fn next(&mut self) -> Option<Self::Item<'_>> {
         while let Some(path_to_explore) = self.candidates.pop_front() {
-            tracing::debug!("Looking at {}", path_to_explore.starting_point);
+            tracing::trace!("Looking at {}", path_to_explore.starting_point);
             let found = find_more_addresses(path_to_explore, self.root_node);
             self.candidates.extend(found.branching);
 
             if let Some(address) = found.hit {
-                tracing::debug!("We got a hit: {address}");
+                tracing::trace!("We got a hit: {address}");
                 self.found_addresses.push_back(address);
             }
         }
