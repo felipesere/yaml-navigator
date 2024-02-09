@@ -239,8 +239,11 @@ pub struct ManyResults<'input> {
     root_node: &'input Value,
 }
 
+#[derive(Debug)]
+pub struct Context {}
+
 impl<'input> Iterator for ManyResults<'input> {
-    type Item = &'input Value;
+    type Item = (Context, &'input Value);
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(path_to_explore) = self.candidates.pop_front() {
@@ -256,8 +259,8 @@ impl<'input> Iterator for ManyResults<'input> {
             if let Some(address) = found.hit {
                 tracing::trace!("We got a hit: {address}");
                 let node = get(self.root_node, &address);
-                if node.is_some() {
-                    return node;
+                if let Some(v) = node {
+                    return Some((Context {}, v));
                 }
             };
         }
@@ -403,12 +406,12 @@ mod tests {
 
         let first_persons_name = query!["people", 0, "name",];
 
-        let felipe = navigate_iter(&yaml, first_persons_name).next().unwrap();
+        let (_, felipe) = navigate_iter(&yaml, first_persons_name).next().unwrap();
         assert_eq!(felipe, &Value::String("Felipe".into()));
 
         let yoga = query!("people", "*", "sports", 1,);
 
-        let yoga: Vec<_> = navigate_iter(&yaml, yoga).collect();
+        let yoga: Vec<_> = navigate_iter(&yaml, yoga).map(|(_ctx, val)| val).collect();
         assert_eq!(yoga, vec![&Value::String("yoga".to_string())]);
     }
 
@@ -428,7 +431,7 @@ mod tests {
         let yaml: Value = serde_yaml::from_str(raw).unwrap();
 
         let names: Vec<_> = navigate_iter(&yaml, query)
-            .filter_map(|v| v.as_str())
+            .filter_map(|(_ctx, v)| v.as_str())
             .collect();
 
         assert_eq!(names, vec!["Charlotte", "Alice", "Bob"]);
@@ -464,7 +467,7 @@ mod tests {
         let names_of_people_aged_over_31 =
             query!["people", r#where!("age" => |age: u32| age > 30), "name",];
 
-        let felipe = navigate_iter(&yaml, names_of_people_aged_over_31)
+        let (_, felipe) = navigate_iter(&yaml, names_of_people_aged_over_31)
             .next()
             .unwrap();
         assert_eq!(felipe, &Value::String("Felipe".into()));
@@ -628,7 +631,9 @@ mod tests {
         ];
 
         let felipe: Vec<_> =
-            navigate_iter(&yaml, age_of_people_living_on_foo_street_playing_tennis).collect();
+            navigate_iter(&yaml, age_of_people_living_on_foo_street_playing_tennis)
+                .map(|(_ctx, v)| v)
+                .collect();
         assert_eq!(felipe, vec![&serde_yaml::Value::Number(32.into())]);
     }
 
@@ -675,7 +680,9 @@ mod tests {
             "age"
         ];
 
-        let both: Vec<_> = navigate_iter(&yaml, computer_or_swimming).collect();
+        let both: Vec<_> = navigate_iter(&yaml, computer_or_swimming)
+            .map(|(_ctx, v)| v)
+            .collect();
         assert_eq!(
             both,
             vec![
