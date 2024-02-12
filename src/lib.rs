@@ -71,6 +71,7 @@ macro_rules! or {
 #[macro_export]
 macro_rules! branch {
     ($($a:expr $(,)?)+) => {{
+        #[allow(clippy::vec_init_then_push)]
         let mut arms: Vec<$crate::Query> = Vec::new();
         $(
             arms.push($a.into());
@@ -258,13 +259,13 @@ impl Path {
         for s in &self.0 {
             match s {
                 LocationFragment::Field(f) => {
-                    buf.push_str(".");
-                    buf.push_str(&f);
+                    buf.push('.');
+                    buf.push_str(f);
                 }
                 LocationFragment::Index(at) => {
-                    buf.push_str("[");
+                    buf.push('[');
                     buf.push_str(&at.to_string());
-                    buf.push_str("]");
+                    buf.push(']');
                 }
             }
         }
