@@ -71,6 +71,7 @@ macro_rules! or {
 #[macro_export]
 macro_rules! branch {
     ($($a:expr $(,)?)+) => {{
+        #[allow(clippy::vec_init_then_push)]
         let mut arms: Vec<$crate::Query> = Vec::new();
         $(
             arms.push($a.into());
@@ -239,25 +240,69 @@ pub struct ManyResults<'input> {
     root_node: &'input Value,
 }
 
+/// A bit `Context` that goes along with
+/// the `serde_yaml::Value` that are yielded
+/// when iterating over a document.
+#[derive(Debug)]
+pub struct Context {
+    pub path: Path,
+}
+
+#[derive(Debug)]
+pub struct Path(Vec<LocationFragment>);
+
+impl Path {
+    /// Represents the path as a jq-ish
+    /// string like `.foo[12].bar`
+    pub fn as_jq(&self) -> String {
+        let mut buf = "".to_string();
+        for s in &self.0 {
+            match s {
+                LocationFragment::Field(f) => {
+                    buf.push('.');
+                    buf.push_str(f);
+                }
+                LocationFragment::Index(at) => {
+                    buf.push('[');
+                    buf.push_str(&at.to_string());
+                    buf.push(']');
+                }
+            }
+        }
+        buf
+    }
+}
+
+impl From<Address> for Path {
+    fn from(value: Address) -> Self {
+        Self(value.0)
+    }
+}
+
 impl<'input> Iterator for ManyResults<'input> {
-    type Item = &'input Value;
+    type Item = (Context, &'input Value);
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(path_to_explore) = self.candidates.pop_front() {
-            tracing::debug!(
+            tracing::trace!(
                 "Next candidate to explore: '{}' with query: '{:?}'",
                 path_to_explore.starting_point,
                 path_to_explore.remaining_query,
             );
             let found = find_more_addresses(path_to_explore, self.root_node);
-            tracing::debug!("Found something...");
+            tracing::trace!("Found something...");
             self.candidates.extend(found.branching);
 
             if let Some(address) = found.hit {
-                tracing::debug!("We got a hit: {address}");
+                tracing::trace!("We got a hit: {address}");
                 let node = get(self.root_node, &address);
-                if node.is_some() {
-                    return node;
+                if let Some(v) = node {
+                    return Some((
+                        Context {
+                            path: address.into(),
+                        },
+                        v,
+                    ));
                 }
             };
         }
@@ -302,18 +347,18 @@ pub struct ManyMutResults<'input> {
 }
 
 impl<'input> gat_lending_iterator::LendingIterator for ManyMutResults<'input> {
-    type Item<'a> = &'a mut Value
+    type Item<'a> = (Context, &'a mut Value)
         where
             Self: 'a;
 
     fn next(&mut self) -> Option<Self::Item<'_>> {
         while let Some(path_to_explore) = self.candidates.pop_front() {
-            tracing::debug!("Looking at {}", path_to_explore.starting_point);
+            tracing::trace!("Looking at {}", path_to_explore.starting_point);
             let found = find_more_addresses(path_to_explore, self.root_node);
             self.candidates.extend(found.branching);
 
             if let Some(address) = found.hit {
-                tracing::debug!("We got a hit: {address}");
+                tracing::trace!("We got a hit: {address}");
                 self.found_addresses.push_back(address);
             }
         }
@@ -322,7 +367,12 @@ impl<'input> gat_lending_iterator::LendingIterator for ManyMutResults<'input> {
             // SAFETY: see https://docs.rs/polonius-the-crab/0.3.1/polonius_the_crab/#the-arcanemagic
             let self_ = unsafe { &mut *(self as *mut Self) };
             if let Some(found_node) = get_mut(self_.root_node, &address) {
-                return Some(found_node);
+                return Some((
+                    Context {
+                        path: address.into(),
+                    },
+                    found_node,
+                ));
             }
         }
         None
@@ -403,13 +453,22 @@ mod tests {
 
         let first_persons_name = query!["people", 0, "name",];
 
-        let felipe = navigate_iter(&yaml, first_persons_name).next().unwrap();
+        let (ctx, felipe) = navigate_iter(&yaml, first_persons_name).next().unwrap();
         assert_eq!(felipe, &Value::String("Felipe".into()));
+        assert_eq!(&ctx.path.as_jq(), ".people[0].name");
 
         let yoga = query!("people", "*", "sports", 1,);
 
-        let yoga: Vec<_> = navigate_iter(&yaml, yoga).collect();
-        assert_eq!(yoga, vec![&Value::String("yoga".to_string())]);
+        let yoga: Vec<_> = navigate_iter(&yaml, yoga)
+            .map(|(ctx, val)| (ctx.path.as_jq(), val))
+            .collect();
+        assert_eq!(
+            yoga,
+            vec![(
+                ".people[1].sports[1]".to_string(),
+                &Value::String("yoga".to_string())
+            )]
+        );
     }
 
     #[test]
@@ -428,7 +487,7 @@ mod tests {
         let yaml: Value = serde_yaml::from_str(raw).unwrap();
 
         let names: Vec<_> = navigate_iter(&yaml, query)
-            .filter_map(|v| v.as_str())
+            .filter_map(|(_ctx, v)| v.as_str())
             .collect();
 
         assert_eq!(names, vec!["Charlotte", "Alice", "Bob"]);
@@ -464,7 +523,7 @@ mod tests {
         let names_of_people_aged_over_31 =
             query!["people", r#where!("age" => |age: u32| age > 30), "name",];
 
-        let felipe = navigate_iter(&yaml, names_of_people_aged_over_31)
+        let (_, felipe) = navigate_iter(&yaml, names_of_people_aged_over_31)
             .next()
             .unwrap();
         assert_eq!(felipe, &Value::String("Felipe".into()));
@@ -628,7 +687,9 @@ mod tests {
         ];
 
         let felipe: Vec<_> =
-            navigate_iter(&yaml, age_of_people_living_on_foo_street_playing_tennis).collect();
+            navigate_iter(&yaml, age_of_people_living_on_foo_street_playing_tennis)
+                .map(|(_ctx, v)| v)
+                .collect();
         assert_eq!(felipe, vec![&serde_yaml::Value::Number(32.into())]);
     }
 
@@ -675,7 +736,9 @@ mod tests {
             "age"
         ];
 
-        let both: Vec<_> = navigate_iter(&yaml, computer_or_swimming).collect();
+        let both: Vec<_> = navigate_iter(&yaml, computer_or_swimming)
+            .map(|(_ctx, v)| v)
+            .collect();
         assert_eq!(
             both,
             vec![
@@ -721,7 +784,7 @@ mod tests {
         {
             let mut iter = navigate_iter_mut(&mut yaml, felipes_name);
 
-            while let Some(name) = iter.next() {
+            while let Some((_, name)) = iter.next() {
                 *name = serde_yaml::Value::from("epileF");
             }
         }
@@ -760,7 +823,7 @@ mod tests {
 
         {
             let mut iter = navigate_iter_mut(&mut yaml, hobbies_and_sport.clone());
-            while let Some(hobby_or_sport) = iter.next() {
+            while let Some((_ctx, hobby_or_sport)) = iter.next() {
                 *hobby_or_sport = serde_yaml::Value::from("F1");
             }
         }
@@ -827,7 +890,7 @@ mod tests {
 
         {
             let mut iter = navigate_iter_mut(&mut yaml, annotations_everywhere);
-            while let Some(annotations) = iter.next() {
+            while let Some((_ctx, annotations)) = iter.next() {
                 if let Some(m) = annotations.as_mapping_mut() {
                     m.insert("new".into(), 100.into());
                 };
