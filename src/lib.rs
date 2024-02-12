@@ -434,6 +434,7 @@ pub fn navigate_iter_mut(input: &mut Value, query: Query) -> ManyMutResults<'_> 
 #[cfg(test)]
 mod tests {
     use gat_lending_iterator::LendingIterator;
+    use serde_yaml::Mapping;
     use std::assert_eq;
     use tracing_test::traced_test;
 
@@ -969,8 +970,10 @@ mod tests {
         let metadata_without_annotations =
             query!["...", missing![parent => "metadata", query!["annotations"]]];
 
-        let parents: Vec<_> = navigate_iter(&yaml, metadata_without_annotations).collect();
-        assert_eq!(2, parents.len());
+        let parents: Vec<_> = navigate_iter(&yaml, metadata_without_annotations)
+            .map(|(ctx, _)| ctx.path.as_jq())
+            .collect();
+        assert_eq!(parents, vec![".metadata", ".spec.template.metadata"]);
 
         let labels_of_metadata_without_annotations = query![
             "...",
@@ -978,7 +981,16 @@ mod tests {
             "labels"
         ];
 
-        let labels: Vec<_> = navigate_iter(&yaml, labels_of_metadata_without_annotations).collect();
+        let labels: Vec<_> = navigate_iter(&yaml, labels_of_metadata_without_annotations)
+            .map(|(ctx, val)| (ctx.path.as_jq(), val))
+            .collect();
         assert_eq!(1, labels.len());
+        assert_eq!(
+            labels[0],
+            (
+                ".metadata.labels".to_string(),
+                &serde_yaml::Value::Mapping(Mapping::from_iter([("alpha".into(), 1.into(),)]))
+            )
+        );
     }
 }
