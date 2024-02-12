@@ -126,7 +126,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindAddresse
     let Some((next_step, remaining_query)) = path.remaining_query.take_step() else {
         return FindAddresses::hit(current_address);
     };
-    tracing::trace!("The next step to take is {next_step}");
+    tracing::trace!("The next step to take is '{next_step}'");
 
     // if not, can we get the node for the current address?
     let Some(node) = get(root, &current_address) else {
@@ -138,6 +138,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindAddresse
     // and keep searching with the normal query...
     let mut additional_paths = Vec::new();
     if let SearchKind::Recursive(recursive_query) = &path.search_kind {
+        tracing::trace!("Recursion, adding all fields...");
         if let Some(m) = node.as_mapping() {
             for (key, _) in m {
                 let field = key.as_str().unwrap().to_string();
@@ -278,6 +279,28 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindAddresse
                     FindAddresses::nothing()
                 }
             }
+            (Step::Missing { parent, sub_query }, any) => {
+                if let Some(field) = any.get(&parent) {
+                    tracing::debug!(
+                        "Found parent '{parent}', looking if sub-query yields no results"
+                    );
+                    if matching_addresses(field, sub_query).is_empty() {
+                        tracing::debug!("sub_query returned empty, considering parent a candidate");
+                        break 'match_block find_more_addresses(
+                            Candidate {
+                                starting_point: current_address.extend(parent.clone()),
+                                remaining_query,
+                                search_kind: crate::SearchKind::default(),
+                            },
+                            any,
+                        );
+                    } else {
+                        tracing::debug!("sub_query had matches, ignoring parent");
+                    }
+                }
+                tracing::debug!("{parent} not found in current node");
+                FindAddresses::nothing()
+            }
             (Step::SubQuery(field, sub_query), val @ Value::Mapping(_)) => {
                 let value_to_check = if field == "." {
                     val
@@ -371,8 +394,7 @@ pub(crate) fn find_more_addresses(path: Candidate, root: &Value) -> FindAddresse
         }
     };
 
-    tracing::trace!("This is the outcome of running the step: {next:?}");
-
     next.branching.extend(additional_paths);
+    tracing::trace!("This is the outcome of running the step: {next:?}");
     next
 }

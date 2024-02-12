@@ -80,6 +80,16 @@ macro_rules! branch {
     }};
 }
 
+#[macro_export]
+macro_rules! missing {
+    (parent => $field:literal, $sub_query:expr) => {{
+        $crate::Step::Missing {
+            parent: $field.to_string(),
+            sub_query: $sub_query,
+        }
+    }};
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Query {
     pub steps: Vec<Step>,
@@ -108,6 +118,7 @@ pub enum Step {
     Filter(String, Arc<dyn Fn(&serde_yaml::Value) -> bool>),
     SubQuery(String, Query),
     Range(Range<usize>),
+    Missing { parent: String, sub_query: Query },
 }
 
 impl std::fmt::Display for Step {
@@ -166,6 +177,7 @@ impl Step {
             Step::All => "all",
             Step::Filter(_, _) => "filter",
             Step::SubQuery(_, _) => "sub_query",
+            Step::Missing { .. } => "missing",
         }
     }
 
@@ -214,6 +226,11 @@ impl std::fmt::Debug for Step {
             Self::Filter(arg0, _arg1) => f.debug_tuple("Filter").field(arg0).finish(),
             Self::SubQuery(arg, _arg2) => f.debug_tuple("SubQuery").field(arg).finish(),
             Self::Recursive => write!(f, "Recursive"),
+            Self::Missing { parent, sub_query } => f
+                .debug_tuple("Missing")
+                .field(parent)
+                .field(sub_query)
+                .finish(),
         }
     }
 }
@@ -290,7 +307,7 @@ impl<'input> Iterator for ManyResults<'input> {
                 path_to_explore.remaining_query,
             );
             let found = find_more_addresses(path_to_explore, self.root_node);
-            tracing::trace!("Found something...");
+            tracing::trace!("Adding to the list of candidates: {:?}", found.branching);
             self.candidates.extend(found.branching);
 
             if let Some(address) = found.hit {
@@ -878,7 +895,7 @@ mod tests {
                   bar:
                     labels:
                       echo: 5
-                    annotations: 
+                    annotations:
                       foxtrott: 6
             "#})
         .unwrap();
@@ -926,5 +943,42 @@ mod tests {
 
         let labels: Vec<_> = navigate_iter(&yaml, query!["spec", "...", "labels"]).collect();
         assert_eq!(2, labels.len());
+    }
+
+    #[test]
+    #[traced_test]
+    fn negative_lookup() {
+        let yaml: serde_yaml::Value = serde_yaml::from_str(indoc! {r#"
+            kind: Foo
+            apiVersion: v1
+            metadata:
+              labels:
+                alpha: 1
+            spec:
+              template:
+                metadata:
+                foo:
+                  bar:
+                    labels:
+                      echo: 5
+                    annotations:
+                      foxtrott: 6
+            "#})
+        .unwrap();
+
+        let metadata_without_annotations =
+            query!["...", missing![parent => "metadata", query!["annotations"]]];
+
+        let parents: Vec<_> = navigate_iter(&yaml, metadata_without_annotations).collect();
+        assert_eq!(2, parents.len());
+
+        let labels_of_metadata_without_annotations = query![
+            "...",
+            missing![parent => "metadata", query!["annotations"]],
+            "labels"
+        ];
+
+        let labels: Vec<_> = navigate_iter(&yaml, labels_of_metadata_without_annotations).collect();
+        assert_eq!(1, labels.len());
     }
 }
