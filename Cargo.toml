@@ -1,6 +1,6 @@
 [package]
 name = "yaml-navigator"
-version = "0.1.0"
+version = "0.2.0"
 description = "A library for writing and running queries against YAML"
 homepage = "https://github.com/felipesere/yaml-navigator"
 repository = "https://github.com/felipesere/yaml-navigator"
