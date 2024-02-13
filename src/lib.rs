@@ -51,7 +51,7 @@ macro_rules! and {
     ($($a:expr $(,)?)+) => {{
         let mut arms: Vec<$crate::Query> = Vec::new();
         $(
-            arms.push($a);
+            arms.push($a.into());
         )+
         $crate::Step::And(arms)
     }};
@@ -62,7 +62,7 @@ macro_rules! or {
     ($($a:expr $(,)?)+) => {{
         let mut arms: Vec<$crate::Query> = Vec::new();
         $(
-            arms.push($a);
+            arms.push($a.into());
         )+
         $crate::Step::Or(arms)
     }};
@@ -127,6 +127,19 @@ impl std::fmt::Display for Step {
     }
 }
 
+impl<S: Into<Step>> From<S> for Query {
+    fn from(value: S) -> Self {
+        let step = value.into();
+        Query { steps: vec![step] }
+    }
+}
+
+impl From<Vec<Step>> for Query {
+    fn from(steps: Vec<Step>) -> Self {
+        Query { steps }
+    }
+}
+
 impl From<String> for Step {
     fn from(value: String) -> Self {
         match value.as_str() {
@@ -141,14 +154,6 @@ impl From<&str> for Step {
     fn from(value: &str) -> Self {
         let val = value.to_string();
         Step::from(val)
-    }
-}
-
-impl From<&str> for Query {
-    fn from(value: &str) -> Self {
-        Query {
-            steps: vec![value.into()],
-        }
     }
 }
 
